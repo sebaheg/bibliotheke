@@ -1,0 +1,22 @@
+id: georges-braque
+type: person
+name: Georges Braque
+notes: ''
+facts:
+- id: fad7fe8
+  key: field
+  value: painting
+  valid_from: 1900
+  valid_to: 1963
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: e977b48
+  rel: member_of
+  to: cubism
+  valid_from: 1908
+  valid_to: 1919
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

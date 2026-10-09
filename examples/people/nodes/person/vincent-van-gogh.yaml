@@ -1,0 +1,22 @@
+id: vincent-van-gogh
+type: person
+name: Vincent van Gogh
+notes: ''
+facts:
+- id: fe22e96
+  key: field
+  value: painting
+  valid_from: 1880
+  valid_to: 1890
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: eadae18
+  rel: lived_with
+  to: paul-gauguin
+  valid_from: 1888-10
+  valid_to: 1888-12
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

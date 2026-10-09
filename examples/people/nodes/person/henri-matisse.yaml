@@ -1,0 +1,22 @@
+id: henri-matisse
+type: person
+name: Henri Matisse
+notes: ''
+facts:
+- id: fa33e4b
+  key: field
+  value: painting
+  valid_from: 1890
+  valid_to: 1954
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: e448b45
+  rel: friend_of
+  to: pablo-picasso
+  valid_from: 1906
+  valid_to: 1954
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

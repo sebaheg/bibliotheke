@@ -1,0 +1,22 @@
+id: alan-turing
+type: person
+name: Alan Turing
+notes: ''
+facts:
+- id: fc41718
+  key: field
+  value: ai
+  valid_from: 1934
+  valid_to: 1954
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: e13c125
+  rel: met
+  to: claude-shannon
+  valid_from: 1943
+  valid_to: 1943
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

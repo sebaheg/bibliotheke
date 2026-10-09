@@ -1,0 +1,30 @@
+id: yoshua-bengio
+type: person
+name: Yoshua Bengio
+notes: ''
+facts:
+- id: f7b366c
+  key: field
+  value: ai
+  valid_from: 1991
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: eaddf2a
+  rel: works_at
+  to: bell-labs
+  valid_from: 1992
+  valid_to: 1993
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: ea9c68a
+  rel: won
+  to: turing-award
+  valid_from: 2018
+  valid_to: 2018
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

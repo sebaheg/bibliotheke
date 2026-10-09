@@ -1,0 +1,30 @@
+id: david-bowie
+type: person
+name: David Bowie
+notes: ''
+facts:
+- id: f9ee83a
+  key: field
+  value: music
+  valid_from: 1962
+  valid_to: 2016
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: e48ff8f
+  rel: wrote_song_about
+  to: andy-warhol
+  valid_from: 1971
+  valid_to: 1971
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: e3fb3cd
+  rel: collaborated_with
+  to: brian-eno
+  valid_from: 1976
+  valid_to: 1979
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

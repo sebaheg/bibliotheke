@@ -1,0 +1,22 @@
+id: paul-mccartney
+type: person
+name: Paul McCartney
+notes: ''
+facts:
+- id: f320e89
+  key: field
+  value: music
+  valid_from: 1957
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: e11a99f
+  rel: member_of
+  to: the-beatles
+  valid_from: 1960
+  valid_to: 1970
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

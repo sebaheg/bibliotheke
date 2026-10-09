@@ -1,0 +1,46 @@
+id: ilya-sutskever
+type: person
+name: Ilya Sutskever
+notes: ''
+facts:
+- id: ffc23bb
+  key: field
+  value: ai
+  valid_from: 2012
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: e2e79f1
+  rel: student_of
+  to: geoffrey-hinton
+  valid_from: 2007
+  valid_to: 2012
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: ecc88fe
+  rel: works_at
+  to: google
+  valid_from: 2013
+  valid_to: 2015
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: e1e4a69
+  rel: works_at
+  to: openai
+  valid_from: 2015
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: 2026-10-04T15:30:00Z
+- id: e1e4a69
+  rel: works_at
+  to: openai
+  valid_from: 2015
+  valid_to: 2024
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T15:30:00Z
+  superseded_at: null

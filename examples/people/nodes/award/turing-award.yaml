@@ -1,0 +1,14 @@
+id: turing-award
+type: award
+name: Turing Award
+notes: ''
+facts: []
+edges:
+- id: ef3be1a
+  rel: named_after
+  to: alan-turing
+  valid_from: 1966
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

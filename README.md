@@ -1,0 +1,213 @@
+# Bibliotheke
+
+Bibliotheke is a lightweight, general-purpose knowledge graph framework: `pip install`, no server, no database, just human-readable YAML/Markdown files in your repo, versioned with git.
+
+Every fact and edge carries three time axes, so you can travel in time through the graph:
+
+- **Valid time** (`valid_from`, `valid_to`): when it is true in the world.
+- **Knowledge time** (`known_at`): when it was first known.
+- **Change time** (`changed_at`, `superseded_at`): when the record was written or replaced. Updates append a new version and never delete, so the graph can be read as it was at any earlier moment.
+
+Bibliotheke makes no LLM calls. It gives people and coding agents (Claude Code, Codex, ...) one CLI, `bib`, to read and write the graph.
+
+## Quickstart
+
+```sh
+bib init
+bib add node person "Geoffrey Hinton"
+bib add node organisation "Google"
+bib add fact geoffrey-hinton field ai --valid-from 1978
+bib add edge geoffrey-hinton works_at google --valid-from 2013 --valid-to 2023
+
+bib show geoffrey-hinton                    # the current graph
+bib show geoffrey-hinton --valid-at 2024    # what was true in 2024
+bib show geoffrey-hinton --json             # for agents
+bib view --color-by field                   # interactive graph in the terminal
+```
+
+`add fact` and `add edge` print a record id. Use it to change a record without losing history:
+
+```sh
+bib update e1a2b3c --valid-to 2024    # appends a new version
+bib retract e1a2b3c                   # hides it from the current graph
+bib history geoffrey-hinton           # every version, including superseded ones
+```
+
+Other commands: `bib list`, `bib search <text>`, `bib check`, `bib import`, `bib export`, `bib path`, `bib rank`, `bib communities`, `bib diff`. The read commands take `--valid-at`, `--known-at` and `--changed-at`, alone or combined, and `--at-commit <rev>` to read the graph as it was in a git commit. Time values are `YYYY`, `YYYY-MM`, `YYYY-MM-DD` or an ISO timestamp; `--valid-to 2023` means through the end of 2023.
+
+## Files
+
+A graph is a directory with a `bibliotheke.yaml` marker and one file per node at `nodes/<type>/<id>.yaml`. Node types, fact keys and relations are whatever you choose.
+
+```yaml
+id: geoffrey-hinton
+type: person
+name: Geoffrey Hinton
+notes: ''
+facts:
+- id: f86accb
+  key: field
+  value: ai
+  valid_from: 1978
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: e2314c7
+  rel: works_at
+  to: google
+  valid_from: 2013
+  valid_to: 2023
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+```
+
+## Data model
+
+`bibliotheke.yaml` can describe what the graph holds, so that one file tells a reader (person or agent) what data is there. The node types come first, then the edges between them:
+
+```yaml
+schema_version: 1
+
+description: >
+  A multilingual vocabulary. Each node is one word in one language;
+  translations link words across languages.
+time: ignored              # valid_from/valid_to are not used (default: tracked)
+
+vocabularies:
+  lang: [en, sv, de]
+
+nodes:
+  word:
+    description: A single word in one language.
+    id: "<name>-<lang>"    # <name> or any fact key
+    body: Usage notes and example sentences.
+    facts:
+      lang:       {type: enum, values: lang, required: true}
+      definition: {type: text, required: true}
+      example:    {type: text, many: true}
+
+edges:
+  translates_to:
+    from: word
+    to: word
+    symmetric: true
+    description: Same meaning in another language.
+```
+
+Node types are lowercase with hyphens (`part-of-speech`). Fact types are `text`, `int`, `number`, `bool`, `time`, `url`, `file` and `enum`; `int: frequency` is short for `{type: int}`. An enum takes its `values` inline or names a vocabulary. A fact takes one value at a time unless it says `many: true`. Edge `from` and `to` take a type or a list of types, and a `symmetric` edge is stored once, in either direction. Edges can be `required`, and take any number of targets unless they say `many: false`. A placeholder in an `id` template is `name`, a fact key, or an edge whose target id fills it in, so `<pos>` works whether part of speech is a fact or an edge to a `part-of-speech` node.
+
+With a model in place, `bib add`, `bib update` and `bib import` refuse anything it does not allow (unknown types, keys and edges, bad values, a second value for a single-valued fact or a second target for a single-target edge), and `bib import` fills in ids from the `id` template. `bib check` reports hand edits that break it, as well as missing required facts and edges, and ids that do not follow the template. `bib model` prints the model, and `bib model --json` gives it to agents. Without a `nodes:` section, a graph accepts anything.
+
+## Bodies and files
+
+Long-form notes live next to a node as Markdown at `nodes/<type>/<id>.md` (its *body*). `bib search` reads bodies too. A fact with the key `file` names a file relative to the graph root, such as a source PDF, and `bib check` reports it if the file goes missing.
+
+## Batch import and export
+
+`bib import batch.yaml` merges many nodes, facts, edges and bodies at once, which suits agents that extract a whole document in one go. Everything is checked before anything is written, and re-running a batch adds nothing twice. A node's `valid_from` is inherited by its facts and edges:
+
+```yaml
+known_at: 2026-09-20
+nodes:
+  - type: paper
+    id: darwin-godel-machine
+    name: "Darwin Gödel Machine: Open-Ended Evolution of Self-Improving Agents"
+    valid_from: 2025-05-29
+    facts: {year: 2025, arxiv: "2505.22954", topic: [rsi, open-endedness]}
+    edges: [{rel: authored_by, to: jeff-clune}]
+    body: |
+      # Darwin Gödel Machine
+      ...
+  - {type: person, name: Jeff Clune}
+edges:
+  - {from: jeff-clune, rel: affiliated_with, to: ubc, valid_from: 2021}
+```
+
+`bib export` prints a Markdown table, e.g. a catalogue. Columns are `id`, `name`, `type`, a fact key, `>rel` (names of out-edge targets) or `<rel` (names of in-edge sources):
+
+```sh
+bib export --type paper --columns name,year,>authored_by,<cites --sort=-year > CATALOG.md
+```
+
+## Graph analysis
+
+In memory the graph is a [NetworkX](https://networkx.org/) multigraph, so the usual algorithms run on it as it was at any point in time. Three commands cover the common questions; all take the time filters, `--rel` to keep only some relations, `--json` for agents, and follow edges either way unless `--directed`:
+
+```sh
+bib path paul-cezanne pablo-picasso            # the shortest chain of edges between two nodes
+bib rank --by betweenness --valid-at 1960      # degree, pagerank or betweenness centrality
+bib communities --min-size 3                   # Louvain communities, largest first
+```
+
+From Python, `Graph.nx(at, rels, types)` returns a frozen `networkx.MultiDiGraph` of what is in view: one edge per record, keyed by record id, with `rel` and the time fields as attributes; a node carries `type`, `name` and one attribute per fact key. It is ready for anything NetworkX offers, including `nx.write_graphml` for Gephi and friends:
+
+```python
+import networkx as nx
+from bibliotheke import At, Graph
+
+graph = Graph.open("examples/people")
+H = graph.nx(At(valid_at=1960), rels=["works_at"])
+nx.write_graphml(H, "people-1960.graphml")
+```
+
+## Git
+
+The files are the database, so git is the audit trail. Every write changes one node file, keeps the old version in it, and dumps the file deterministically, so a diff shows only what changed. Two commands read git directly, without checking anything out:
+
+```sh
+bib show geoffrey-hinton --at-commit v1.0     # the graph as committed at any revision
+bib rank --at-commit HEAD~10                  # every read command takes --at-commit
+bib diff HEAD~10                              # nodes, facts and edges added, changed or retracted since then
+bib diff v1.0 v2.0 --json
+```
+
+`--at-commit` combines with the time filters: `--at-commit v1.0 --valid-at 1960` is what the graph, as it stood at `v1.0`, said about 1960. A graph read from a commit is read-only.
+
+## Graph view
+
+`bib view` opens a 3D force-directed graph drawn with [plotui](https://pypi.org/project/plotui/). Drag to rotate, scroll to zoom, hover a node to light up its neighbourhood, click a node or edge to inspect it. It takes the same time filters as the read commands. It needs a terminal with the Kitty graphics protocol (Ghostty, Kitty, iTerm2 3.5+, WezTerm).
+
+The default `map` theme draws a network map on a near-black canvas. Nodes are sized by how connected they are, edges are thin translucent strokes in their endpoints' colours, everything is antialiased, and the best-connected nodes are labelled. `--theme classic` gives the original look. A graph can set its own defaults in `bibliotheke.yaml`:
+
+```yaml
+schema_version: 1
+view:
+  theme: map
+  color_by: type        # or a fact key, or an edge (nodes take their target's colour)
+  labels: 16            # name this many of the best-connected nodes
+  colors:               # per category, #rrggbb
+    paper: "#f0f0f4"
+    concept: "#66d9a6"
+```
+
+Click a legend row to hide that category, click again to bring it back.
+
+## Globe view
+
+`bib globe` puts the graph on a 3D Earth. A *place* is any node with `lat` and `lon` facts, such as a city. Other nodes are placed by following their edges. `based_in` is checked first, then `located_in`, then `affiliated_with`, so a person sits at their organisation's city unless they have a `based_in` of their own. Each place is a point sized by how many people it holds. Arcs join two places when a shared node, such as a co-authored paper, touches people in both. Click a place to see who is there and what they wrote. It takes the same time filters, and `--who` picks which node types to place (default `person`).
+
+```yaml
+globe:
+  who: [person]
+  theme: dark          # dark, earth, light, blueprint or wire
+```
+
+## Example
+
+`examples/people` is a small graph of painters, musicians and AI researchers with approximately dated relations:
+
+```sh
+uv run bib view --root examples/people --color-by field
+uv run bib view --root examples/people --color-by field --valid-at 1960
+uv run python examples/build_people.py    # rebuild it from scratch
+```
+
+## Development
+
+```sh
+uv sync
+uv run pytest
+```

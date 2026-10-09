@@ -1,0 +1,14 @@
+id: diego-rivera
+type: person
+name: Diego Rivera
+notes: ''
+facts:
+- id: f7cac34
+  key: field
+  value: painting
+  valid_from: 1906
+  valid_to: 1957
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges: []

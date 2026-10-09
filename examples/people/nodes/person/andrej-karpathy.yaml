@@ -1,0 +1,30 @@
+id: andrej-karpathy
+type: person
+name: Andrej Karpathy
+notes: ''
+facts:
+- id: f71ca33
+  key: field
+  value: ai
+  valid_from: 2015
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: ee8d0de
+  rel: student_of
+  to: fei-fei-li
+  valid_from: 2011
+  valid_to: 2015
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: ed5e110
+  rel: works_at
+  to: openai
+  valid_from: 2015
+  valid_to: 2017
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

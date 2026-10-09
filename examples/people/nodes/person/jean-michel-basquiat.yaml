@@ -1,0 +1,22 @@
+id: jean-michel-basquiat
+type: person
+name: Jean-Michel Basquiat
+notes: ''
+facts:
+- id: f970a46
+  key: field
+  value: painting
+  valid_from: 1978
+  valid_to: 1988
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: eb0b24d
+  rel: collaborated_with
+  to: andy-warhol
+  valid_from: 1984
+  valid_to: 1985
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

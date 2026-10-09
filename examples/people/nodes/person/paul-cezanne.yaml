@@ -1,0 +1,30 @@
+id: paul-cezanne
+type: person
+name: Paul Cézanne
+notes: ''
+facts:
+- id: fd9e65d
+  key: field
+  value: painting
+  valid_from: 1861
+  valid_to: 1906
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: eb175d1
+  rel: influenced
+  to: pablo-picasso
+  valid_from: 1907
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: e3ac62f
+  rel: influenced
+  to: henri-matisse
+  valid_from: 1899
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

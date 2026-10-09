@@ -1,0 +1,30 @@
+id: pablo-picasso
+type: person
+name: Pablo Picasso
+notes: ''
+facts:
+- id: f5894f2
+  key: field
+  value: painting
+  valid_from: 1894
+  valid_to: 1973
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: e91961c
+  rel: member_of
+  to: cubism
+  valid_from: 1907
+  valid_to: 1919
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: ef540d7
+  rel: collaborated_with
+  to: georges-braque
+  valid_from: 1908
+  valid_to: 1914
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

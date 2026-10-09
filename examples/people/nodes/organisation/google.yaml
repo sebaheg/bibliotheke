@@ -1,0 +1,14 @@
+id: google
+type: organisation
+name: Google
+notes: ''
+facts: []
+edges:
+- id: e044ff6
+  rel: acquired
+  to: deepmind
+  valid_from: 2014
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

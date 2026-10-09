@@ -1,0 +1,22 @@
+id: fei-fei-li
+type: person
+name: Fei-Fei Li
+notes: ''
+facts:
+- id: f783ec6
+  key: field
+  value: ai
+  valid_from: 2005
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: ef077f3
+  rel: works_at
+  to: stanford-university
+  valid_from: 2009
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

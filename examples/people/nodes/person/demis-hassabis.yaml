@@ -1,0 +1,22 @@
+id: demis-hassabis
+type: person
+name: Demis Hassabis
+notes: ''
+facts:
+- id: f5f3882
+  key: field
+  value: ai
+  valid_from: 2009
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: e3c5213
+  rel: works_at
+  to: deepmind
+  valid_from: 2010
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

@@ -1,0 +1,22 @@
+id: herbie-hancock
+type: person
+name: Herbie Hancock
+notes: ''
+facts:
+- id: fd8eb72
+  key: field
+  value: music
+  valid_from: 1961
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: ee71599
+  rel: played_with
+  to: miles-davis
+  valid_from: 1963
+  valid_to: 1968
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

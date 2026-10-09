@@ -1,0 +1,30 @@
+id: frida-kahlo
+type: person
+name: Frida Kahlo
+notes: ''
+facts:
+- id: f0fb8f9
+  key: field
+  value: painting
+  valid_from: 1925
+  valid_to: 1954
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: ed79a47
+  rel: married_to
+  to: diego-rivera
+  valid_from: 1929
+  valid_to: 1939
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: e791c93
+  rel: married_to
+  to: diego-rivera
+  valid_from: 1940
+  valid_to: 1954
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

@@ -1,0 +1,46 @@
+id: yann-lecun
+type: person
+name: Yann LeCun
+notes: ''
+facts:
+- id: f25ffd7
+  key: field
+  value: ai
+  valid_from: 1987
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: e0d3904
+  rel: postdoc_with
+  to: geoffrey-hinton
+  valid_from: 1987
+  valid_to: 1988
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: ede4ab7
+  rel: works_at
+  to: bell-labs
+  valid_from: 1988
+  valid_to: 1996
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: eb0fae6
+  rel: works_at
+  to: meta
+  valid_from: 2013
+  valid_to: 2025
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: e2707b8
+  rel: won
+  to: turing-award
+  valid_from: 2018
+  valid_to: 2018
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null

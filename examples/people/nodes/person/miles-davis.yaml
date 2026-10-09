@@ -1,0 +1,14 @@
+id: miles-davis
+type: person
+name: Miles Davis
+notes: ''
+facts:
+- id: fe40fc8
+  key: field
+  value: music
+  valid_from: 1944
+  valid_to: 1991
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges: []

@@ -1,0 +1,38 @@
+id: geoffrey-hinton
+type: person
+name: Geoffrey Hinton
+notes: ''
+facts:
+- id: f86accb
+  key: field
+  value: ai
+  valid_from: 1978
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+edges:
+- id: e031659
+  rel: works_at
+  to: university-of-toronto
+  valid_from: 1987
+  valid_to: null
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: e2314c7
+  rel: works_at
+  to: google
+  valid_from: 2013
+  valid_to: 2023
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
+- id: e24ce5b
+  rel: won
+  to: turing-award
+  valid_from: 2018
+  valid_to: 2018
+  known_at: 2026-10-01
+  changed_at: 2026-10-04T09:00:00Z
+  superseded_at: null
