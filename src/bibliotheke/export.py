@@ -11,6 +11,7 @@ from typing import Any
 
 from bibliotheke import store
 from bibliotheke.graph import NOW, At, Graph, GraphError
+from bibliotheke.model import Node
 
 
 def cell(graph: Graph, node_id: str, column: str, at: At = NOW) -> list[Any]:
@@ -54,6 +55,21 @@ def markdown_table(
             row.append(text.replace("|", "\\|").replace("\n", " "))
         lines.append("| " + " | ".join(row) + " |")
     return "\n".join(lines) + "\n"
+
+
+def node_json(graph: Graph, node: Node, at: At | None) -> dict[str, Any]:
+    """A node's records in view; ``at=None`` means every version."""
+    sees = (lambda r: True) if at is None else at.sees
+    return {
+        "id": node.id,
+        "type": node.type,
+        "name": node.name,
+        "notes": node.notes,
+        "body": store.body_rel(node) if graph.has_body(node) else None,
+        "facts": [f.to_dict() for f in node.facts if sees(f)],
+        "out_edges": [e.to_dict() for e in node.edges if sees(e)],
+        "in_edges": [{"from": other.id, **e.to_dict()} for other, e in graph.in_edges(node.id, at)],
+    }
 
 
 def _header(column: str) -> str:

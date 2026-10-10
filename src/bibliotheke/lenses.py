@@ -28,7 +28,7 @@ schema describes a literature graph and a repository. The first lens is the
 default; ``bib view --lens NAME`` starts on another. This module parses and
 validates the section into plain :class:`Spec` data (no display code is
 imported, so ``bib check`` can report a lens that names a type the model
-does not have) and builds :class:`~bibliotheke.view.Lens` objects from it.
+does not have) and builds :class:`~bibliotheke.scene.Lens` objects from it.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from bibliotheke.model import Node
 
 if TYPE_CHECKING:
     from bibliotheke.graph import Graph
-    from bibliotheke.view import Lens
+    from bibliotheke.scene import Lens
 
 SECTION = "view"
 # Keys that describe one lens. All of them may also sit at the view level,
@@ -250,11 +250,11 @@ def build(
     label: Callable[[Node], str] | None = None,
     colors: dict[str, str] | None = None,
 ) -> list[Lens]:
-    """:class:`~bibliotheke.view.Lens` objects for the specs. ``theme`` and
+    """:class:`~bibliotheke.scene.Lens` objects for the specs. ``theme`` and
     ``color_by`` are command-line overrides for every lens; ``group``,
     ``label`` and ``colors`` are hooks for what YAML cannot say (a legend
     row computed from the data, a label cut a particular way)."""
-    from bibliotheke.view import Lens, theme_for
+    from bibliotheke.scene import Lens, theme_for
 
     lenses = []
     for spec in specs:
@@ -509,7 +509,7 @@ def _labeller(types: tuple[str, ...] | None, label: Callable[[Node], str] | None
     for the given types and names nothing else."""
     if types is None:
         return label
-    from bibliotheke.view import short_name
+    from bibliotheke.scene import short_name
 
     text = label or (lambda node: short_name(node.name))
     allowed = set(types)

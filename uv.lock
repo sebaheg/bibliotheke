@@ -16,6 +16,7 @@ name = "bibliotheke"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "markdown-it-py" },
     { name = "networkx" },
     { name = "plotui", extra = ["textual"] },
     { name = "pyyaml" },
@@ -36,6 +37,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "markdown-it-py", specifier = ">=3.0" },
     { name = "networkx", specifier = ">=3.3" },
     { name = "plotui", extras = ["textual"], directory = "../plotui" },
     { name = "pymupdf", marker = "extra == 'fetch'", specifier = ">=1.24" },

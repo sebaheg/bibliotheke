@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<link rel="stylesheet" href="site.css">
+<link rel="icon" href="data:,">
+<script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.80.1/dist/3d-force-graph.min.js"></script>
+</head>
+<body class="explorer">
+<header>
+  <a class="home" href="index.html">__TITLE__</a>
+  <nav id="lenses"></nav>
+  <div class="search">
+    <input id="search" placeholder="Search" autocomplete="off" spellcheck="false">
+    <ol id="hits" hidden></ol>
+  </div>
+  <nav><a href="types.html">Browse</a></nav>
+</header>
+<div id="body">
+  <div id="stage">
+    <div id="plot"></div>
+    <div id="globe" hidden></div>
+    <div id="labels"></div>
+    <div id="legend"></div>
+    <div id="loading">Loading the graph…</div>
+  </div>
+  <aside id="sidebar"></aside>
+</div>
+<footer id="time" hidden>
+  <button id="play" title="Play the whole span (space)">▶</button>
+  <button id="axis" title="Move valid time or knowledge time (a)">valid</button>
+  <span id="first"></span>
+  <input id="slider" type="range" min="0" max="1000" value="1000">
+  <span id="last"></span>
+  <span id="when"></span>
+  <button id="all" title="Show everything, whatever its time">all time</button>
+</footer>
+<script src="explorer.js"></script>
+</body>
+</html>

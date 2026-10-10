@@ -5,6 +5,7 @@ description = "A lightweight, general-purpose knowledge graph framework: no serv
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "markdown-it-py>=3.0",
     "networkx>=3.3",
     "plotui[textual]>=0.6.0",
     "pyyaml>=6.0",

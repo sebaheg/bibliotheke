@@ -176,24 +176,9 @@ def _row(record: Record, cells: list[str], history: bool, event: bool = False) -
     return row
 
 
-def _node_json(graph: Graph, node: Node, at: At | None) -> dict[str, Any]:
-    """A node's records in view; ``at=None`` means every version."""
-    sees = (lambda r: True) if at is None else at.sees
-    return {
-        "id": node.id,
-        "type": node.type,
-        "name": node.name,
-        "notes": node.notes,
-        "body": store.body_rel(node) if graph.has_body(node) else None,
-        "facts": [f.to_dict() for f in node.facts if sees(f)],
-        "out_edges": [e.to_dict() for e in node.edges if sees(e)],
-        "in_edges": [{"from": other.id, **e.to_dict()} for other, e in graph.in_edges(node.id, at)],
-    }
-
-
 def _print_node(graph: Graph, node: Node, at: At | None) -> None:
     history = at is None
-    data = _node_json(graph, node, at)
+    data = exporter.node_json(graph, node, at)
     out.print(f"[bold]{node.name}[/bold]  [dim]{node.type} · {node.id}[/dim]")
     if node.notes:
         out.print(node.notes.rstrip())
@@ -364,7 +349,7 @@ def show(
     at = _at(valid_at, known_at, changed_at)
     found = graph.node(node)
     if as_json:
-        _echo_json(_node_json(graph, found, at))
+        _echo_json(exporter.node_json(graph, found, at))
     else:
         _print_node(graph, found, at)
 
@@ -380,7 +365,7 @@ def history(
     graph = _open(root, at_commit)
     found = graph.node(node)
     if as_json:
-        _echo_json(_node_json(graph, found, None))
+        _echo_json(exporter.node_json(graph, found, None))
     else:
         _print_node(graph, found, None)
 
@@ -1387,16 +1372,59 @@ def ci(
     install: Annotated[
         str, typer.Option("--install", help="The shell command that installs bib on the runner.")
     ] = "pip install bibliotheke",
+    pages: Annotated[
+        bool, typer.Option("--pages", help="Instead: a workflow that publishes `bib site` on GitHub Pages on every push to main.")
+    ] = False,
     root: Root = None,
 ) -> None:
     """Print a GitHub Actions workflow that checks the graph on every pull request,
     shows what a model change does, and posts the report on the PR.
-    Save it as .github/workflows/bibliotheke.yml at the repository root."""
+    Save it as .github/workflows/bibliotheke.yml at the repository root;
+    with --pages, as .github/workflows/bibliotheke-pages.yml."""
     graph = _open(root)
     try:
-        typer.echo(gitops.workflow(graph.root, install), nl=False)
+        typer.echo((gitops.pages_workflow if pages else gitops.workflow)(graph.root, install), nl=False)
     except ValueError as error:
         raise GraphError(str(error)) from None
+
+
+@app.command()
+def site(
+    out: Annotated[Path, typer.Option("--out", "-o", help="The folder to write; replaced if it exists.")] = Path("_site"),
+    title: Annotated[Optional[str], typer.Option("--title", help="The site's title (default: the graph's folder name).")] = None,
+    base_url: Annotated[
+        Optional[str], typer.Option("--base-url", help="Where the site will live, for its sitemap.txt.")
+    ] = None,
+    serve: Annotated[bool, typer.Option("--serve", help="Then serve it on localhost and open it.")] = False,
+    port: Annotated[int, typer.Option("--port", help="With --serve.")] = 8000,
+    root: Root = None,
+) -> None:
+    """Write the graph as a static website: an explorer with the lenses and the
+    time bar (index.html), a page and a JSON file per node (n/<id>.html,
+    n/<id>.json) and a listing per type. Any static host serves it;
+    `bib ci --pages` publishes it on GitHub Pages."""
+    from bibliotheke import site as sites
+    from bibliotheke.lenses import LensError
+
+    graph = _open(root)
+    try:
+        built = sites.build(graph, out, title=title, base_url=base_url or None)
+    except LensError as error:
+        raise GraphError(str(error)) from None
+    typer.echo(f"Wrote {built.out}: {built.nodes} node pages, lenses {', '.join(built.lenses)} ({built.seconds:.1f}s)")
+    if serve:
+        import functools
+        import http.server
+
+        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(built.out))
+        with http.server.ThreadingHTTPServer(("127.0.0.1", port), handler) as server:
+            url = f"http://127.0.0.1:{port}/"
+            typer.echo(f"Serving on {url} (ctrl-c to stop)")
+            webbrowser.open(url)
+            try:
+                server.serve_forever()
+            except KeyboardInterrupt:
+                pass
 
 
 @app.command()

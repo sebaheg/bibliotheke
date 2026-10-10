@@ -33,7 +33,7 @@ bib retract e1a2b3c                   # hides it from the current graph
 bib history geoffrey-hinton           # every version, including superseded ones
 ```
 
-On a graph you do not know, start with `bib types` (each node type, how many nodes, what the model says it is), then `bib browse`: a prompt that lists types, a type's nodes, a node's facts and edges, each step printed and left in the terminal; a number follows an edge, `..` goes back. `bib show` prints the ids at the far end of every edge, so the same walk works one command at a time. Everything prints and exits; only `bib view` and `bib browse --tui` open a full-screen view. Other commands: `bib list`, `bib search <text>`, `bib check`, `bib model`, `bib import`, `bib fetch <url>`, `bib export`, `bib path`, `bib rank`, `bib communities`, `bib diff`. The read commands take `--valid-at`, `--known-at` and `--changed-at`, alone or combined, and `--at-commit <rev>` to read the graph as it was in a git commit. Time values are `YYYY`, `YYYY-MM`, `YYYY-MM-DD` or an ISO timestamp; `--valid-to 2023` means through the end of 2023.
+On a graph you do not know, start with `bib types` (each node type, how many nodes, what the model says it is), then `bib browse`: a prompt that lists types, a type's nodes, a node's facts and edges, each step printed and left in the terminal; a number follows an edge, `..` goes back. `bib show` prints the ids at the far end of every edge, so the same walk works one command at a time. Everything prints and exits; only `bib view` and `bib browse --tui` open a full-screen view. Other commands: `bib list`, `bib search <text>`, `bib check`, `bib model`, `bib import`, `bib fetch <url>`, `bib export`, `bib site`, `bib path`, `bib rank`, `bib communities`, `bib diff`. The read commands take `--valid-at`, `--known-at` and `--changed-at`, alone or combined, and `--at-commit <rev>` to read the graph as it was in a git commit. Time values are `YYYY`, `YYYY-MM`, `YYYY-MM-DD` or an ISO timestamp; `--valid-to 2023` means through the end of 2023.
 
 `bib list` and `bib search` sort by type unless told otherwise. `--sort` takes `type`, `name`, `id` or `valid` (earliest first), and a graph can set its own default in `bibliotheke.yaml`:
 
@@ -366,6 +366,19 @@ view:
 ```
 
 It takes the other lens keys too: `hide`/`show`, `color_by`, `colors`, `labels`, `legend`. `bib globe` is kept as a shortcut for `bib view globe`.
+
+## Website
+
+`bib site` writes the graph as a static website, with nothing to run behind it: any static host serves the folder (GitHub Pages, Cloudflare Pages, a bucket), and `--serve` opens it on localhost.
+
+```sh
+bib site --out _site --serve
+bib ci --pages > .github/workflows/bibliotheke-pages.yml   # publish it on GitHub Pages on every push to main
+```
+
+`index.html` is the explorer: the lenses of `bib view` in the browser, with the same colours, sizes, labels and theme, the globe lens on a globe, the time bar on valid or known time (`a`, as in the terminal), the legend rows that hide a category, and a search over every node. Every node has a page, `n/<id>.html`, that reads like `bib show` and needs no JavaScript, and the same as JSON, `n/<id>.json` (`bib show --json`, every version), so a person can link one claim and an agent can walk the graph over HTTP; `types.html` and `t/<type>.html` list the nodes by type, as `bib browse` does. `index.html#<id>` opens the explorer on a node, `#lens:<name>` on a lens.
+
+Everything is computed when the site is built: each lens's scene and its layout run to rest, and the time windows of every record, so the browser only filters by time and draws, and a layout never moves. A globe lens is placed as of now; the time bar then shows a place while anything placed there is in view. Links are relative, so the folder works under a project path such as `user.github.io/repo/`. The pages workflow runs `bib check` first, so a data problem stops a deploy as it stops a commit; turn on Pages with Settings > Pages > Source: GitHub Actions, and pass `--install` to say how the runner gets `bib`.
 
 ## Example
 

@@ -139,6 +139,58 @@ def workflow(root: Path, install: str = "pip install bibliotheke") -> str:
     return WORKFLOW.replace("__DIR__", prefix.rstrip("/") or ".").replace("__INSTALL__", install)
 
 
+PAGES = """# Written by `bib ci --pages`. On every push to main: check the graph, build
+# the site with `bib site`, and publish it on GitHub Pages (Settings > Pages >
+# Source: GitHub Actions).
+name: bibliotheke-pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: __DIR__
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: __INSTALL__
+      - run: bib check
+      - uses: actions/configure-pages@v5
+        id: pages
+      - run: bib site --out "$RUNNER_TEMP/site" --base-url "${{ steps.pages.outputs.base_url }}"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
+"""
+
+
+def pages_workflow(root: Path, install: str = "pip install bibliotheke") -> str:
+    """A GitHub Actions workflow that publishes the graph's site on GitHub Pages."""
+    _, prefix = repo(root)
+    return PAGES.replace("__DIR__", prefix.rstrip("/") or ".").replace("__INSTALL__", install)
+
+
 # -- history ---------------------------------------------------------------------
 
 
