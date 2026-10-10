@@ -30,7 +30,7 @@ ROOT_MARKER = "bibliotheke.yaml"
 NODES_DIR = "nodes"
 MODEL_DIR = "model"
 VOCABULARIES = "vocabularies"  # model/vocabularies.yaml
-MODEL_KEYS = ("description", "time", "vocabularies", "nodes", "edges")
+MODEL_KEYS = ("description", "version", "time", "vocabularies", "nodes", "edges")
 FOLDER, FILE = "folder", "file"  # the two layouts a model can have
 SCHEMA_VERSION = 1
 

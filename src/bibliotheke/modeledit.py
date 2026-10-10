@@ -481,3 +481,29 @@ def _edge_changes(rel: str, a: EdgeSpec, b: EdgeSpec) -> Iterator[Change]:
         yield Change(ADDITIVE if b.many else DESTRUCTIVE, rel, "now takes many targets" if b.many else "now takes one target")
     if a.description != b.description:
         yield Change(NEUTRAL, rel, "description changed")
+
+
+# -- report -------------------------------------------------------------------------
+
+
+def markdown_report(title: str, changes: list[Change] | None, problems: list[str], node_count: int) -> str:
+    """The model changes and the data check as Markdown, for a pull request
+    or a CI summary. ``changes`` is None when no revision was compared."""
+    marks = {ADDITIVE: "+", DESTRUCTIVE: "-", NEUTRAL: "~"}
+    lines = []
+    if changes is not None:
+        lines += [f"### {title}", ""]
+        if changes:
+            lines += ["| | where | what | kind |", "|---|---|---|---|"]
+            for kind in KINDS:
+                lines += [f"| `{marks[kind]}` | `{c.where}` | {c.what} | {kind} |" for c in changes if c.kind == kind]
+        else:
+            lines.append("No change.")
+        lines.append("")
+    lines += ["### Data", ""]
+    if problems:
+        lines.append(f"{len(problems)} problem{'s' if len(problems) != 1 else ''}:")
+        lines += [f"- {problem}" for problem in problems]
+    else:
+        lines.append(f"OK: {node_count} nodes.")
+    return "\n".join(lines) + "\n"

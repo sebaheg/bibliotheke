@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.table import Table
 
 from bibliotheke import analysis
+from bibliotheke import gitops
 from bibliotheke import modeledit
 from bibliotheke import diff as differ
 from bibliotheke import export as exporter
@@ -44,6 +45,8 @@ model_drop = typer.Typer(help="Drop a node type, a fact or an edge from the mode
 model_app.add_typer(model_add, name="add")
 model_app.add_typer(model_rename, name="rename")
 model_app.add_typer(model_drop, name="drop")
+hook_app = typer.Typer(help="The pre-commit hook that runs `bib check` before every commit.", no_args_is_help=True)
+app.add_typer(hook_app, name="hook")
 
 # The repository scanner lives in its own package and only uses the public API;
 # this is the one place the rest of bibliotheke refers to it.
@@ -533,6 +536,8 @@ def model(ctx: typer.Context, as_json: AsJson = False, at_commit: AtCommit = Non
         return
     if data["description"]:
         out.print(data["description"])
+    if graph.marker.get(gitops.VERSION_KEY):
+        out.print(f"[dim]Version {graph.marker[gitops.VERSION_KEY]}[/dim]")
     if data["time"] == "ignored":
         out.print("[dim]Valid time is not used in this graph.[/dim]")
     for type, spec in data["nodes"].items():
@@ -820,6 +825,7 @@ def model_diff(
     rev1: Annotated[str, typer.Argument(help="Git revision to compare from.")] = "HEAD",
     rev2: Annotated[Optional[str], typer.Argument(help="Git revision to compare to. Default: the working tree.")] = None,
     as_json: AsJson = False,
+    markdown: Annotated[bool, typer.Option("--markdown", help="Report as Markdown, for a pull request.")] = False,
     root: Root = None,
 ) -> None:
     """How the model changed between two git revisions, and what the change breaks.
@@ -840,11 +846,74 @@ def model_diff(
                 "problems": problems,
             }
         )
+    elif markdown:
+        typer.echo(modeledit.markdown_report(f"Model changes, {rev1} → {rev2 or 'working tree'}", changes, problems, len(new.nodes)), nl=False)
     else:
         _print_changes(f"Model changes, {rev1} → {rev2 or 'working tree'}", changes)
         _print_problems(problems)
     if problems:
         raise typer.Exit(1)
+
+
+@model_app.command("log")
+def model_log(
+    max_count: Annotated[int, typer.Option("--max", help="How many model-touching commits to look at.")] = 20,
+    as_json: AsJson = False,
+    root: Root = None,
+) -> None:
+    """The commits that changed the model, newest first, each with what the change did."""
+    graph = _open(root)
+    try:
+        entries = gitops.model_log(graph.root, max_count)
+    except ValueError as error:
+        raise GraphError(str(error)) from None
+    if as_json:
+        _echo_json([e.to_dict() for e in entries])
+        return
+    if not entries:
+        out.print("No commits changed the model")
+        return
+    table = Table(box=None, pad_edge=False)
+    for column in ("date", "commit", "subject", "model change"):
+        table.add_column(column)
+    for entry in entries:
+        table.add_row(entry.date, entry.sha[:7], entry.subject, gitops.summary(entry.changes))
+    out.print(table)
+
+
+@model_app.command("version")
+def model_version(
+    bump: Annotated[bool, typer.Option("--bump", help="Set the next version from the changes since the last model tag.")] = False,
+    root: Root = None,
+) -> None:
+    """The model's version, or with --bump the next one: destructive changes bump
+    the major number, additive the minor, neutral the patch. Tag it with `bib model tag`."""
+    graph = _open(root)
+    current = graph.marker.get(gitops.VERSION_KEY)
+    if not bump:
+        typer.echo(str(current) if current else "no version; `bib model version --bump` sets one")
+        return
+    graph._mutable()
+    try:
+        version, changes, tag = gitops.next_version(graph.root, graph.marker)
+    except ValueError as error:
+        raise GraphError(str(error)) from None
+    if changes:
+        _print_changes(f"Model changes since {tag}", changes)
+    graph.marker[gitops.VERSION_KEY] = version
+    store.save_model(graph.root, graph.marker, graph.layout or store.FILE)
+    out.print(f"Version {version}" + (f" (was {current})" if current and str(current) != version else "") + "; commit, then `bib model tag`")
+
+
+@model_app.command("tag")
+def model_tag(root: Root = None) -> None:
+    """Tag the committed model with its version, as model-v<version>. Push tags with `git push --tags`."""
+    graph = _open(root)
+    try:
+        name = gitops.tag_version(graph.root, graph.marker)
+    except ValueError as error:
+        raise GraphError(str(error)) from None
+    out.print(f"Tagged HEAD as {name}; `git push --tags` publishes it")
 
 
 def _edit_text(text: str) -> str:
@@ -995,17 +1064,77 @@ def model_split(root: Root = None) -> None:
 
 
 @app.command()
-def check(root: Root = None) -> None:
+def check(
+    since: Annotated[
+        Optional[str], typer.Option("--since", help="Also show how the model changed since this git revision.")
+    ] = None,
+    markdown: Annotated[bool, typer.Option("--markdown", help="Report as Markdown, for a pull request.")] = False,
+    no_destructive: Annotated[
+        bool, typer.Option("--no-destructive", help="With --since: fail on a destructive model change too.")
+    ] = False,
+    root: Root = None,
+) -> None:
     """Validate the graph files: dangling edges, misplaced files, duplicate records,
     orphaned bodies, `file` facts that name missing files, and anything the data
-    model in bibliotheke.yaml does not allow."""
+    model does not allow. Exits 1 on a problem."""
     graph = _open(root)
     problems = graph.check()
-    for problem in problems:
-        err.print(problem)
+    changes = modeledit.diff_models(_open(root, since).model, graph.model) if since else None
+    destructive = any(c.kind == modeledit.DESTRUCTIVE for c in changes or [])
+    if markdown:
+        typer.echo(modeledit.markdown_report(f"Model changes since {since}", changes, problems, len(graph.nodes)), nl=False)
+    else:
+        if changes is not None:
+            _print_changes(f"Model changes since {since}", changes)
+        for problem in problems:
+            err.print(problem)
+        if not problems:
+            typer.echo(f"OK: {len(graph.nodes)} nodes")
+    if no_destructive and destructive:
+        err.print("[red]destructive model change[/red]; set BIB_ALLOW_DESTRUCTIVE=1 to commit it anyway")
+        raise typer.Exit(1)
     if problems:
         raise typer.Exit(1)
-    typer.echo(f"OK: {len(graph.nodes)} nodes")
+
+
+@hook_app.command("install")
+def hook_install(root: Root = None) -> None:
+    """Install a pre-commit hook that runs `bib check --since HEAD` and refuses
+    destructive model changes unless BIB_ALLOW_DESTRUCTIVE is set."""
+    graph = _open(root)
+    try:
+        path = gitops.install_hook(graph.root)
+    except ValueError as error:
+        raise GraphError(str(error)) from None
+    typer.echo(f"Installed {path}")
+
+
+@hook_app.command("remove")
+def hook_remove(root: Root = None) -> None:
+    """Remove the hook `bib hook install` wrote."""
+    graph = _open(root)
+    try:
+        path = gitops.remove_hook(graph.root)
+    except ValueError as error:
+        raise GraphError(str(error)) from None
+    typer.echo(f"Removed {path}" if path else "No hook installed")
+
+
+@app.command()
+def ci(
+    install: Annotated[
+        str, typer.Option("--install", help="The shell command that installs bib on the runner.")
+    ] = "pip install bibliotheke",
+    root: Root = None,
+) -> None:
+    """Print a GitHub Actions workflow that checks the graph on every pull request,
+    shows what a model change does, and posts the report on the PR.
+    Save it as .github/workflows/bibliotheke.yml at the repository root."""
+    graph = _open(root)
+    try:
+        typer.echo(gitops.workflow(graph.root, install), nl=False)
+    except ValueError as error:
+        raise GraphError(str(error)) from None
 
 
 @app.command()

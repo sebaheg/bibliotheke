@@ -148,6 +148,20 @@ bib model open                 # the model/ folder on GitHub, in the browser; `o
 
 Both classify every change as additive (`+`, nothing that was allowed is refused: a new type, an optional fact, an enum value), destructive (`-`, something that was allowed is now refused: a fact removed, a fact made required, an enum value dropped, a type changed, a template changed) or neutral (`~`, descriptions), then list the current records that break the newer model. `bib model edit` does not save a model that current records break unless you pass `--force`; `bib model diff` exits 1 in that case. Comments in the model files survive `bib model edit` but not the other subcommands, which rewrite them.
 
+### The model under git
+
+The model is files in git, so a change to it can be gated, reviewed, logged and versioned like code. `bib` has one command for each:
+
+```sh
+bib hook install                      # pre-commit hook: `bib check --since HEAD`, refuses destructive model changes
+bib ci > .github/workflows/bibliotheke.yml   # GitHub Actions: check every PR and post the model report on it
+bib model log                         # the commits that changed the model, each with what the change did
+bib model version --bump              # next version from the changes since the last tag; `bib model tag` tags HEAD
+bib check --since origin/main --markdown     # the model change and the data check, as one Markdown report
+```
+
+The hook runs `bib check --since HEAD --no-destructive` before every commit: a data problem or a destructive model change stops the commit. `BIB_ALLOW_DESTRUCTIVE=1 git commit` lets a destructive change through once it is meant, and `git commit --no-verify` skips the hook. The workflow does the same on pull requests against the base branch, comments the report on the PR, and fails the job on a data problem; pass `--install` to say how the runner gets `bib`. `bib model log` reads the model at each commit that touched it and summarises the diff, so the history reads as "+2: claim, made_in" rather than "bibliotheke.yaml changed". Versions follow the same classification: a destructive change bumps the major number, an additive one the minor, a neutral one the patch. `bib model version --bump` writes the number to `bibliotheke.yaml`, and after the commit `bib model tag` tags it `model-v<version>`, so consumers of the graph can pin a model version and know what a bump means.
+
 ## Bodies and files
 
 Long-form notes live next to a node as Markdown at `nodes/<type>/<id>.md` (its *body*). `bib search` reads bodies too. A fact with the key `file` names a file relative to the graph root, such as a source PDF, and `bib check` reports it if the file goes missing.
