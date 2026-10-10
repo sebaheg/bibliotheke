@@ -1,4 +1,4 @@
-"""Bibliotheke: a files-only knowledge graph with three time axes."""
+"""Bibliotheke: a git-versioned, files-only knowledge graph with three time axes."""
 
 from bibliotheke.graph import At, Graph, GraphError
 from bibliotheke.model import Edge, Fact, Node

@@ -26,14 +26,15 @@ _VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 HOOK = f"""#!/bin/sh
 {HOOK_MARK}; `bib hook remove` deletes it.
-# Checks the graph against its data model before every commit and shows what
-# a model change does. A destructive model change is refused unless
+# Checks the graph against its data model before every commit, then shows
+# what a model change does. A destructive model change is refused unless
 # BIB_ALLOW_DESTRUCTIVE is set; `git commit --no-verify` skips the hook.
 cd "$(git rev-parse --show-toplevel)/__PREFIX__" || exit 1
 if command -v bib >/dev/null 2>&1; then BIB=bib; else BIB="uv run --quiet bib"; fi
-git rev-parse -q --verify HEAD >/dev/null 2>&1 || exec $BIB check
-if [ -n "$BIB_ALLOW_DESTRUCTIVE" ]; then exec $BIB check --since HEAD; fi
-exec $BIB check --since HEAD --no-destructive
+$BIB check || exit 1
+git rev-parse -q --verify HEAD >/dev/null 2>&1 || exit 0
+if [ -n "$BIB_ALLOW_DESTRUCTIVE" ]; then exec $BIB model diff HEAD; fi
+exec $BIB model diff HEAD --no-destructive
 """
 
 WORKFLOW = """# Written by `bib ci`. On every pull request: check the graph against its
@@ -66,8 +67,10 @@ jobs:
           since="${{ github.event.pull_request.base.sha || github.event.before }}"
           git cat-file -e "$since" 2>/dev/null || since=""
           set +e
-          bib check ${since:+--since "$since"} --markdown > report.md
-          echo "status=$?" >> "$GITHUB_OUTPUT"
+          bib check --markdown > report.md
+          status=$?
+          if [ -n "$since" ]; then bib model diff "$since" --markdown >> report.md || status=1; fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
           cat report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Comment on the pull request
         if: github.event_name == 'pull_request'

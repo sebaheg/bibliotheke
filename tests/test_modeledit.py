@@ -120,6 +120,7 @@ def test_rename_fact_rewrites_every_version_and_the_id_template(root):
     assert data["nodes"]["word"]["id"] == "<name>-<language>"
     g = Graph.open(root)
     assert [f.key for f in g.node("adamant-en").facts] == ["language", "example", "example"]
+    assert data["view"] == {"color_by": "language"}, "the view settings follow the rename"
     assert g.check() == []
     result = run(root, "model", "rename", "fact", "word", "example", "quote")
     assert "in 2 records" in result.output, "superseded versions are renamed too"
@@ -182,11 +183,13 @@ def test_diff_models_classifies():
     changed["nodes"]["phrase"] = {"facts": {"lang": {"type": "enum", "values": "lang", "required": True}}}
     changed["edges"]["in_phrase"] = {"from": "phrase", "to": "word", "required": True}
     changed["edges"]["origin"] = {"from": "word", "to": "phrase", "required": True}
+    changed["nodes"]["word"]["time"] = "event"
     new = DataModel.from_marker(changed)
     changes = {(c.where, c.what): c.kind for c in modeledit.diff_models(old, new)}
     assert changes == {
         ("time", "ignored → tracked"): "additive",
         ("word", "id template '<name>-<lang>' → None"): "additive",
+        ("word", "time interval → event"): "neutral",
         ("word.lang", "values added: de"): "additive",
         ("word.lang", "values removed: sv"): "destructive",
         ("word.example", "now required"): "destructive",

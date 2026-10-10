@@ -64,6 +64,21 @@ def test_list_search_check(root):
     assert run(root, "check").endswith("OK: 3 nodes")
 
 
+def test_list_sort_default_comes_from_the_marker(root):
+    run(root, "add", "node", "person", "Bo Ek")
+    run(root, "add", "fact", "bo-ek", "field", "ai", "--valid-from", "2010")
+    run(root, "add", "fact", "anna-berg", "field", "ai", "--valid-from", "2019")
+    marker = root / "bibliotheke.yaml"
+    marker.write_text(marker.read_text() + "list:\n  sort: valid\n")
+    ids = lambda text: [line.split()[0] for line in text.splitlines()[1:]]
+    assert ids(run(root, "list", "--type", "person")) == ["bo-ek", "anna-berg"]
+    assert ids(run(root, "search", "ai", "--type", "person")) == ["bo-ek", "anna-berg"]
+    assert ids(run(root, "list", "--type", "person", "--sort", "id")) == ["anna-berg", "bo-ek"]
+    marker.write_text(marker.read_text().replace("sort: valid", "sort: newest"))
+    with pytest.raises(GraphError, match="list: sort:"):
+        run(root, "list")
+
+
 def test_unknown_node_is_a_graph_error(root):
     with pytest.raises(GraphError):
         run(root, "show", "nobody")
@@ -165,3 +180,29 @@ def test_check_breaks_down_by_type(root):
     run(root, "add", "fact", "anna-berg", "field", "ai")
     data = json.loads(run(root, "check", "--json"))
     assert data["ok"] and data["types"][2]["facts"] == 1
+
+
+def test_view_list_prints_the_lenses_and_check_reads_the_view_section(root):
+    marker = root / "bibliotheke.yaml"
+    marker.write_text(
+        marker.read_text()
+        + "view:\n  lenses:\n    - name: People\n      description: who knows whom\n      rels: [knows]\n      hide: [organisation]\n"
+    )
+    run(root, "add", "edge", "anna-berg", "knows", "deepmind")
+    output = run(root, "view", "--list")
+    assert "1 lens" in output and "bib view people" in output and "who knows whom" in output
+    assert run(root, "view", "list") == output, "`bib view list` is `bib view --list`"
+    detailed = run(root, "view", "list", "--details")
+    assert "bib view people" in detailed and "hides   organisation" in detailed and "draws   knows" in detailed
+    assert run(root, "check").endswith("OK: 2 nodes")
+    marker.write_text(marker.read_text().replace("[organisation]", "[org]"))
+    output = runner.invoke(app, ["check", "--root", str(root)]).output
+    assert "bibliotheke.yaml: view.lenses[People].hide: no node type 'org'" in output
+    assert runner.invoke(app, ["view", "--list", "--root", str(root)]).exit_code == 1
+
+
+def test_version():
+    from importlib.metadata import version
+
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0 and result.output.strip() == f"bib {version('bibliotheke')}"

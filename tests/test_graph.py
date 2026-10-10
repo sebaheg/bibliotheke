@@ -104,6 +104,12 @@ def test_search_and_in_edges(graph):
     assert [n.id for n in graph.search("works_at")] == ["anna-berg"]
     assert [n.id for n in graph.search("deepmind")] == ["anna-berg", "deepmind"]
     assert [(n.id, e.rel) for n, e in graph.in_edges("deepmind")] == [("anna-berg", "works_at")]
+    # Accents fold both ways: a plain search finds the accented name, an
+    # accented search finds the slugified id.
+    graph.add_node("concept", "Gödel machine")
+    assert [n.id for n in graph.search("godel")] == ["godel-machine"]
+    assert [n.id for n in graph.search("GÖDEL")] == ["godel-machine"]
+    assert [n.id for n in graph.search("deepmind", type="person")] == ["anna-berg"]
 
 
 def test_errors(graph):
@@ -178,3 +184,48 @@ def test_check_flags_missing_files_and_orphan_bodies(graph, tmp_path):
     problems = graph.check()
     assert any("missing.pdf" in p for p in problems)
     assert any("ghost.md" in p for p in problems)
+
+
+STARTS_MODEL = """schema_version: 1
+nodes:
+  paper: {time: event, facts: {year: int}}
+  claim: {time: event}
+  person: {starts: [<authored_by, <made_by]}
+  company: {starts: [founded], facts: {founded: int}}
+edges:
+  authored_by: {from: paper, to: person}
+  made_by: {from: claim, to: person}
+  affiliated_with: {from: person, to: company}
+"""
+
+
+def test_starts_rule_hides_a_node_until_its_first_artefact(tmp_path):
+    (tmp_path / "bibliotheke.yaml").write_text(STARTS_MODEL)
+    (tmp_path / "nodes").mkdir()
+    g = Graph(tmp_path)
+    g.add_node("company", "Acme")
+    g.add_fact("acme", "founded", 2012)
+    g.add_node("person", "Ann")
+    g.add_edge("ann", "affiliated_with", "acme")  # undated: alone it would show Ann at every time
+    g.add_node("paper", "P")
+    g.add_fact("p", "year", 2018, valid_from="2018-05")
+    g.add_edge("p", "authored_by", "ann")
+    g.add_node("person", "Nobody")  # no artefact at all
+    shown = lambda when: {n.id for n in g.list_nodes(At(valid_at=when)) if n.type in ("person", "company")}
+    assert g.begins("ann") == "2018-05" and g.begins("acme") == "2012" and g.begins("nobody") is None
+    assert shown(2010) == set()
+    assert shown(2015) == {"acme"}
+    assert shown("2018-06") == {"acme", "ann"}
+    assert {n.id for n in g.list_nodes()} >= {"ann", "nobody"}, "without a valid time everything shows"
+    assert g.span("ann")[0] == "2018-05"
+    founded = next(f for f in g.node("acme").facts if f.key == "founded")
+    g.update(founded.id, value=2009)  # a write clears the cache of starts
+    assert g.begins("acme") == "2009"
+
+
+def test_starts_rule_must_name_a_time_fact_or_a_relation(tmp_path):
+    from bibliotheke.datamodel import DataModel, ModelError
+
+    bad = yaml.safe_load(STARTS_MODEL.replace("starts: [founded]", "starts: [name]"))
+    with pytest.raises(ModelError, match="starts"):
+        DataModel.from_marker(bad)

@@ -33,7 +33,14 @@ bib retract e1a2b3c                   # hides it from the current graph
 bib history geoffrey-hinton           # every version, including superseded ones
 ```
 
-On a graph you do not know, start with `bib types` (each node type, how many nodes, what the model says it is), then `bib browse`: a prompt that lists types, a type's nodes, a node's facts and edges, each step printed and left in the terminal; a number follows an edge, `..` goes back. `bib show` prints the ids at the far end of every edge, so the same walk works one command at a time. Everything prints and exits; only `bib view`, `bib globe` and `bib browse --tui` open a full-screen view. Other commands: `bib list`, `bib search <text>`, `bib check`, `bib model`, `bib import`, `bib fetch <url>`, `bib export`, `bib path`, `bib rank`, `bib communities`, `bib diff`. The read commands take `--valid-at`, `--known-at` and `--changed-at`, alone or combined, and `--at-commit <rev>` to read the graph as it was in a git commit. Time values are `YYYY`, `YYYY-MM`, `YYYY-MM-DD` or an ISO timestamp; `--valid-to 2023` means through the end of 2023.
+On a graph you do not know, start with `bib types` (each node type, how many nodes, what the model says it is), then `bib browse`: a prompt that lists types, a type's nodes, a node's facts and edges, each step printed and left in the terminal; a number follows an edge, `..` goes back. `bib show` prints the ids at the far end of every edge, so the same walk works one command at a time. Everything prints and exits; only `bib view` and `bib browse --tui` open a full-screen view. Other commands: `bib list`, `bib search <text>`, `bib check`, `bib model`, `bib import`, `bib fetch <url>`, `bib export`, `bib path`, `bib rank`, `bib communities`, `bib diff`. The read commands take `--valid-at`, `--known-at` and `--changed-at`, alone or combined, and `--at-commit <rev>` to read the graph as it was in a git commit. Time values are `YYYY`, `YYYY-MM`, `YYYY-MM-DD` or an ISO timestamp; `--valid-to 2023` means through the end of 2023.
+
+`bib list` and `bib search` sort by type unless told otherwise. `--sort` takes `type`, `name`, `id` or `valid` (earliest first), and a graph can set its own default in `bibliotheke.yaml`:
+
+```yaml
+list:
+  sort: valid
+```
 
 ## Files
 
@@ -118,6 +125,17 @@ Node types are lowercase with hyphens (`part-of-speech`). Fact types are `text`,
 
 A node type sits in valid time in one of two ways. By default it is an **interval**: a job, a membership, a file in a repository, with `valid_from` and `valid_to`. A type with `time: event` (or `bib model add node paper --event`) **happens at an instant**: a paper is published, a claim is made, and it is there from then on. Its records carry `valid_from` as *when* and no `valid_to`; `--valid-at` treats both kinds the same, but an event shows as a date (`2025-05-29`) rather than a span (`2025-05-29 → …`).
 
+Some nodes have no dates of their own: a person, a company. A type's `starts` says when its nodes come into the world, as the earliest of a time fact or the sources that point at it:
+
+```yaml
+# model/person.yaml
+starts: [<authored_by, <features, <made_by]   # their first paper, video or claim
+# model/company.yaml
+starts: [founded, <from_org]                  # its founding year, else its first paper
+```
+
+Under a valid time (`--valid-at`, the time bar in `bib view` and on the globe), such a node is hidden before its start, and hidden altogether when nothing its rule names exists; `bib list` dates it from its start.
+
 With a model in place, `bib add`, `bib update` and `bib import` refuse anything it does not allow (unknown types, keys and edges, bad values, a second value for a single-valued fact or a second target for a single-target edge), and `bib import` fills in ids from the `id` template. `bib check` (or `bib model check`, the same command from the model's side) reports hand edits that break it, as well as missing required facts and edges, and ids that do not follow the template. It prints one row per node type, those the model declares included, with how many nodes, facts and edges it has and how many nodes are consistent with the model, then every problem, then the verdict; `--json` gives the same to agents. `bib model` prints the model, and `bib model --json` gives it to agents. Without a `nodes:` section, a graph accepts anything.
 
 ### Changing the model
@@ -155,14 +173,14 @@ Both classify every change as additive (`+`, nothing that was allowed is refused
 The model is files in git, so a change to it can be gated, reviewed, logged and versioned like code. `bib` has one command for each:
 
 ```sh
-bib hook install                      # pre-commit hook: `bib check --since HEAD`, refuses destructive model changes
+bib hook install                      # pre-commit hook: `bib check`, then `bib model diff HEAD`; refuses destructive model changes
 bib ci > .github/workflows/bibliotheke.yml   # GitHub Actions: check every PR and post the model report on it
 bib model log                         # the commits that changed the model, each with what the change did
 bib model version --bump              # next version from the changes since the last tag; `bib model tag` tags HEAD
-bib check --since origin/main --markdown     # the model change and the data check, as one Markdown report
+bib model diff origin/main --markdown        # the model change since a branch point, as a Markdown report
 ```
 
-The hook runs `bib check --since HEAD --no-destructive` before every commit: a data problem or a destructive model change stops the commit. `BIB_ALLOW_DESTRUCTIVE=1 git commit` lets a destructive change through once it is meant, and `git commit --no-verify` skips the hook. The workflow does the same on pull requests against the base branch, comments the report on the PR, and fails the job on a data problem; pass `--install` to say how the runner gets `bib`. `bib model log` reads the model at each commit that touched it and summarises the diff, so the history reads as "+2: claim, made_in" rather than "bibliotheke.yaml changed". Versions follow the same classification: a destructive change bumps the major number, an additive one the minor, a neutral one the patch. `bib model version --bump` writes the number to `bibliotheke.yaml`, and after the commit `bib model tag` tags it `model-v<version>`, so consumers of the graph can pin a model version and know what a bump means.
+`bib check` asks one question, whether the data and the model agree; `bib model diff` asks how the model changed. The hook runs both before every commit (`bib check`, then `bib model diff HEAD --no-destructive`): a data problem or a destructive model change stops the commit. `BIB_ALLOW_DESTRUCTIVE=1 git commit` lets a destructive change through once it is meant, and `git commit --no-verify` skips the hook. The workflow does the same on pull requests against the base branch, comments the report on the PR, and fails the job on a data problem; pass `--install` to say how the runner gets `bib`. `bib model log` reads the model at each commit that touched it and summarises the diff, so the history reads as "+2: claim, made_in" rather than "bibliotheke.yaml changed". Versions follow the same classification: a destructive change bumps the major number, an additive one the minor, a neutral one the patch. `bib model version --bump` writes the number to `bibliotheke.yaml`, and after the commit `bib model tag` tags it `model-v<version>`, so consumers of the graph can pin a model version and know what a bump means.
 
 ## Bodies and files
 
@@ -269,7 +287,7 @@ Every commit becomes edges: `touched` from the author to each file, and `co_chan
 
 `imports` edges are the dependencies between files, read from each file's contents at every commit that changed it: an edge opens at the commit that introduced the import and closes at the one that dropped it, so `bib rank --rel imports --directed --valid-at 2024` is the most depended-on files as of 2024. Imports are found by pattern, not by parsing, in Python, JavaScript/TypeScript, Rust and C/C++, and resolved against the files that existed at that commit; anything that is not a file in the repository (standard library, packages) is left out. A renamed file keeps its node, so its dependencies carry over. `--no-imports` skips reading contents.
 
-The view has five lenses, each answering a different question; the number keys and `tab` switch between them, and `--lens` picks the first:
+The view has five lenses, each answering a different question; `j`/`k` and `tab` switch between them, and `--lens` picks the first:
 
 1. **Structure**: the directory tree, with what imports what drawn across it. Every directory holds its files on a small sphere around itself and its sub-directories on the side facing away from its parent, each given room for its whole subtree, so the shape radiates from the root, nothing overlaps, and nothing ever moves.
 2. **Map**: the same relations as a force layout, where clusters find their own place.
@@ -277,7 +295,7 @@ The view has five lenses, each answering a different question; the number keys a
 4. **Coupling**: files that changed in the same commit at least three times, however far apart they live in the tree.
 5. **People**: who has touched which files.
 
-All of them draw directories as a quiet grey skeleton and files as the coloured content: the six largest top-level directories get a hue each, the rest share one grey, `imports` edges are light so dependencies read apart from the tree, and a file is sized by how many files import it, which is also what earns it a label. `--rel` makes a lens of your own from any relations (`--layout force` for a simulation even when `contains` is drawn) and `--color-by ext` colours by file type instead.
+All of them draw directories as a quiet grey skeleton and files as the coloured content: the six largest top-level directories get a hue each, the rest share one grey, `imports` edges are light so dependencies read apart from the tree, and a file is sized by how many files import it, which is also what earns it a label. The five lenses are declared in the scanner's own `bibliotheke.yaml` with the same `view:` keys any graph uses (see Lenses below); only the directory hues and the file labels are computed from the repository at hand. `--rel` makes a lens of your own from any relations (`--layout force` for a simulation even when `contains` is drawn) and `--color-by ext` colours by file type instead.
 
 The graph lives in memory unless you `--save` it; saved, it is an ordinary bibliotheke graph with a data model, so `bib rank --rel co_changed`, `bib path`, `bib communities` and `bib export` all work on it. The scanner is a separate package, `bibliotheke.repo`, that only uses the public API.
 
@@ -285,34 +303,69 @@ The graph lives in memory unless you `--save` it; saved, it is an ordinary bibli
 
 `bib view` opens a 3D force-directed graph drawn with [plotui](https://pypi.org/project/plotui/). Drag to rotate, scroll to zoom, hover a node to light up its neighbourhood, click a node or edge to inspect it. It takes the same time filters as the read commands. It needs a terminal with the Kitty graphics protocol (Ghostty, Kitty, iTerm2 3.5+, WezTerm).
 
-The default `map` theme draws a network map on a near-black canvas. Nodes are sized by how connected they are, edges are thin translucent strokes in their endpoints' colours, everything is antialiased, and the best-connected nodes are labelled. `--theme classic` gives the original look. A graph can set its own defaults in `bibliotheke.yaml`:
+The view is drawn in plotui's own design, as on [plotui.xyz](https://plotui.xyz): a near-black blue-grey canvas, the pink / cyan / orange colour way, flat dots sized by how connected they are, thin translucent edges in their endpoints' colours, a legend that is a quiet rounded panel, and the Textual chrome around the plot (header, footer, side panel, time bar) in the same tokens. The best-connected nodes are labelled. `--theme map` is a softer pastel palette and `--theme classic` the original transparent look. The legend's rows are numbered: press the number (or click the row) to hide that category, and again to bring it back.
+
+### Lenses
+
+A graph says how it wants to be looked at in the `view:` section of `bibliotheke.yaml`. The keys at the top are the defaults; under `lenses:` any number of named lenses use the same keys, each one way of drawing the graph that answers one question. A lens inherits what it does not set. Nothing in the schema names a type or relation that bibliotheke knows about, so the same keys describe a literature graph and a repository:
 
 ```yaml
-schema_version: 1
 view:
-  theme: map
-  color_by: type        # or a fact key, or an edge (nodes take their target's colour)
-  labels: 16            # name this many of the best-connected nodes
-  colors:               # per category, #rrggbb
-    paper: "#f0f0f4"
-    concept: "#66d9a6"
+  theme: plotui                       # or dracula, map, classic
+  color_by: type                      # or a fact key, a relation (a node takes its target's colour), or <type>.<key>
+  labels: 12                          # name this many of the heaviest nodes
+  colors: {paper: '#f0f0f4', concept: '#66d9a6'}      # category -> colour
+  hide: [claim, city]                 # node types left out, unless a lens says otherwise
+  lenses:
+    - name: Literature
+      description: papers and concepts, and what builds on what
+      rels: [cites, builds_on, introduces, about]      # edges drawn; nodes in none of them are left out
+      hide: [claim, city, person]
+      size_by: in:cites               # degree (default), in:<rel>, out:<rel>, or a numeric fact key
+      labels: {count: 12, types: [paper, concept]}     # how many, and which types may carry one
+      legend: [paper, concept]        # rows shown (the rest is drawn, just unlisted); false for none
+      edges: {cites: '#8a8fa0'}       # colour per relation; the rest take their endpoints' colours
+    - name: Claims
+      description: what the sources claim about each concept
+      show: [claim, concept, system]  # the positive form of hide: everything else is left out
+      rels: [about]
+      color_by: claim.kind            # claims by their kind, every other node by its type
+      hide_unlinked: true             # a node none of the drawn edges touch is left out
+    - name: Sources
+      description: each source and the claims it makes
+      show: [claim, paper, article]
+      rels: [made_in]
+      tree: made_in                   # a still balloon tree along this relation instead of a force layout
+      color_by: claim.kind
 ```
 
-Click a legend row to hide that category, click again to bring it back.
+A lens shares its theme's colours among the categories it can draw, so a hidden type or another type's facts never take one. A `tree` relation can point either way: `contains` runs from parent to child, `made_in` from each claim up to its one source, and the layout takes the end that has many of the other as the parent.
 
-`bib view --tree contains` (or `tree: contains` under `view:` in `bibliotheke.yaml`) lays any graph with a hierarchy out as a still tree instead of a force simulation; see the repository view below for what that looks like.
+The first lens is what `bib view` opens on; `j`/`k` and `tab` switch, `--lens claims` starts on another, and `bib view --list` prints them without opening anything. The other keys are `min_parallel` (draw a pair of nodes only when at least that many edges join them), `layout: force` (to undo an inherited `tree`), `valid_at` at the view level (`now`, or a time, for the time the view opens on) and `style` for the theme's numbers (`edge_alpha`, `edge_width`, `fog`, `size_min`, `size_step`, `size_max`, `label_size`). `--rel`, `--tree` and `--hide` on the command line make a lens of your own in the declared look; `--theme` and `--color-by` apply to every lens.
 
-When the graph has dated records, a time bar runs under the plot. Drag it, or step with `,` and `.` (`<` and `>` jump), or press `space` to play the whole span: nodes appear and disappear as their facts and edges come into and go out of validity, and edges that are not valid at that time fade into the canvas. The layout is computed once over everything that ever was, so nothing moves while you scrub; a `--valid-at` on the command line sets where the bar starts.
+The section is checked against the model: `bib check` reports a lens that names a type or relation the model does not have, and `bib model rename` and `bib model drop` rewrite the section along with the model, so a lens never goes stale.
+
+When the graph has dated records, a time bar runs under the plot. Drag it, or step with `,` and `.` (`<` and `>` jump), or press `space` to play the whole span: nodes appear and disappear as their facts and edges come into and go out of validity, and edges that are not valid at that time fade into the canvas. The layout is computed once over everything that ever was, so nothing moves while you scrub; a `--valid-at` on the command line sets where the bar starts. Once you click the bar, the arrow keys step it (shift jumps) instead of turning the plot, until you click the plot again. The bar moves valid time by default; press `a` to flip it to knowledge time, so the plot shows what the graph had learned by the date under the handle, and `a` again to flip back. The globe lens has the same bar.
 
 ## Globe view
 
-`bib globe` puts the graph on a 3D Earth. A *place* is any node with `lat` and `lon` facts, such as a city. Other nodes are placed by following their edges. `based_in` is checked first, then `located_in`, then `affiliated_with`, so a person sits at their organisation's city unless they have a `based_in` of their own. Each place is a point sized by how many people it holds. Arcs join two places when a shared node, such as a co-authored paper, touches people in both. Click a place to see who is there and what they wrote. It takes the same time filters, and `--who` picks which node types to place (default `person`).
+A globe is a lens like any other: `bib view globe` opens on it, and `j`/`k` flip between it and the graph lenses. A *place* is any node with `lat` and `lon` facts, such as a city. Other nodes are placed by following their edges to a place. Each place is a point sized by how many nodes it holds and coloured by what most of them are; click one to see what is there, by type. Arcs between places stay quiet, one colour a little stronger the more links they carry, and rise in proportion to their length, so neighbouring cities are joined along the surface and only the long links lift off it. Hover a place to light its own arcs and dim the rest; a click keeps them lit until `esc` or a click on empty space. The time bar places everything again as of the time shown.
+
+A graph whose nodes have coordinates and that declares no globe lens gets one anyway, read from the graph itself: any relation that points at a type with coordinates (`located_in` a city), or at a type placed that way (`affiliated_with` an organisation), is a placement edge, nearest first, and every type that reaches a place within two hops is placed. To choose instead, declare the lens:
 
 ```yaml
-globe:
-  who: [person]
-  theme: dark          # dark, earth, light, blueprint or wire
+view:
+  lenses:
+    - name: Globe
+      layout: globe
+      place: [person]                     # the types that become points
+      via: [based_in, affiliated_with, located_in]   # the first that leads to a place wins
+      arcs: shared                        # shared: two places joined by a node touching both (a co-authored paper)
+                                          # [cites, ...]: an arc per edge of these relations; none: no arcs
+      style: {globe: dark}                # the Earth: dark, earth, light, blueprint or wire
 ```
+
+It takes the other lens keys too: `hide`/`show`, `color_by`, `colors`, `labels`, `legend`. `bib globe` is kept as a shortcut for `bib view globe`.
 
 ## Example
 

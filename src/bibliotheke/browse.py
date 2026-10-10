@@ -13,6 +13,7 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Footer, Header, Input, Static, Tree
 from textual.widgets.tree import TreeNode
 
+from bibliotheke import tui
 from bibliotheke.graph import At, Graph
 from bibliotheke.model import Node
 
@@ -193,7 +194,10 @@ class Walk:
         for i, (type, count) in enumerate(counts, 1):
             self.choices.append(("type", type))
             description = type_description(self.graph, type)
-            self.out.print(f"[bold]{i:3d}[/bold]  {escape(type):14s} [dim]{count:5d}[/dim]  {escape(description)}")
+            self.out.print(
+                f"[bold]{i:3d}[/bold]  {escape(type):14s} [dim]{count:5d}[/dim]  {escape(description)}",
+                no_wrap=True, overflow="ellipsis",  # one line per item; the type's page has the rest
+            )
         self.out.print(f"[dim]{sum(c for _, c in counts)} nodes in {len(counts)} types · a number or a type lists its nodes[/dim]")
 
     def _type(self, type: str) -> None:
@@ -210,9 +214,11 @@ class Walk:
         self.out.print()
         head = f"[bold]{escape(self.type)}[/bold]  [dim]{len(nodes)} node{'s' if len(nodes) != 1 else ''}"
         self.out.print(head + (f", matching /{escape(self.needle)}" if self.needle else "") + "[/dim]")
+        # The id first, in a column, so a long name is what gets cut, not the id.
+        width = max((len(node.id) for node in nodes[:PAGE]), default=0)
         for i, node in enumerate(nodes[:PAGE], 1):
             self.choices.append(("node", node.id))
-            self.out.print(f"[bold]{i:3d}[/bold]  {escape(node.name)}  [dim]{escape(node.id)}[/dim]")
+            self.out.print(f"[bold]{i:3d}[/bold]  [dim]{escape(node.id):{width}s}[/dim]  {escape(node.name)}", no_wrap=True, overflow="ellipsis")
         if len(nodes) > PAGE:
             self.out.print(f"[dim]     … and {len(nodes) - PAGE} more; /text narrows the list[/dim]")
 
@@ -227,6 +233,7 @@ class Walk:
 
 
 class Browser(App):
+    ENABLE_COMMAND_PALETTE = False  # no ^p palette: the keys are the whole interface
     CSS = """
     #body { height: 1fr; }
     #tree { width: 44; height: 1fr; border-right: thick $accent; }
@@ -242,6 +249,7 @@ class Browser(App):
 
     def __init__(self, graph: Graph, at: At = At()) -> None:
         super().__init__()
+        tui.style(self)
         self.graph = graph
         self.at = at
         self.title = f"bibliotheke — {graph.root.name}"

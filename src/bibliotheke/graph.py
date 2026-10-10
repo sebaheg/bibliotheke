@@ -110,6 +110,8 @@ class Graph:
         self._versions: dict[str, list[tuple[Node, Record]]] = {}
         self._pos: dict[str, int] = {}  # node id -> load order, so in_edges keep file order
         self._seq = 0  # keeps the keys of two versions of one edge apart
+        self._writes = 0  # bumped by every write; keys the cache of starts
+        self._starts: tuple[int, dict[str, str | None]] = (-1, {})
         for node in nodes.values():
             self._put_node(node)
         for node in nodes.values():
@@ -132,12 +134,14 @@ class Graph:
         self._index_edge(node, edge)
 
     def _index_fact(self, node: Node, fact: Fact) -> None:
+        self._writes += 1
         self._versions.setdefault(fact.id, []).append((node, fact))
 
     def _index_edge(self, node: Node, edge: Edge) -> None:
         # The attribute is the very Edge object in node.edges: when a write
         # stamps superseded_at on it, the index sees the change at once.
         self._seq += 1
+        self._writes += 1
         self._g.add_edge(node.id, edge.to, key=(edge.id, self._seq), edge=edge)
         self._versions.setdefault(edge.id, []).append((node, edge))
 
@@ -288,6 +292,7 @@ class Graph:
             else:
                 self._no_edge_clash(node, new, [e for e in node.edges if e.superseded_at is None and e is not old])
         old.superseded_at = stamp
+        self._writes += 1
         if isinstance(new, Fact):
             self._put_fact(node, new)
         else:
@@ -300,6 +305,7 @@ class Graph:
         self._mutable()
         node, record = self.record(record_id)
         record.superseded_at = _time(now) or timeutil.now()
+        self._writes += 1
         store.save_node(self.root, node)
         return record
 
@@ -421,7 +427,10 @@ class Graph:
         and the edges at either end, ``None`` for open. A paper's span starts
         at its publication date; a file's runs from creation to deletion."""
         records = [*self.facts(node_id, at), *self.out_edges(node_id, at), *(e for _, e in self.in_edges(node_id, at))]
+        begins = self.begins(node_id)
         starts = [r.valid_from for r in records if r.valid_from]
+        if begins is not None:  # the model says when it starts: that, not its records
+            starts = [begins]
         if not starts and not any(r.valid_to for r in records):
             return None, None
         start = min(starts, key=timeutil.start) if starts else None
@@ -447,14 +456,59 @@ class Graph:
         found.sort(key=lambda pair: self._pos[pair[0].id])
         return found
 
+    def begins(self, node_id: str) -> str | None:
+        """When the node comes into the world by its type's ``starts`` in the
+        model (a company's ``founded``, a person's first paper), or None when
+        the type has no such rule or the node nothing it names. Cached until
+        the next write."""
+        if self._starts[0] != self._writes:
+            self._starts = (self._writes, {})
+        cache = self._starts[1]
+        if node_id not in cache:
+            cache[node_id] = self._begins(node_id)
+        return cache[node_id]
+
+    def _starts_by_rule(self, type: str) -> bool:
+        spec = self.model.nodes.get(type) if self.model else None
+        return bool(spec and spec.starts)
+
+    def _begins(self, node_id: str) -> str | None:
+        node = self.node(node_id)
+        spec = self.model.nodes.get(node.type) if self.model else None
+        if not spec or not spec.starts:
+            return None
+        found: list[str] = []
+        for item in spec.starts:
+            if item.startswith("<"):
+                for src, edge in self.in_edges(node_id):
+                    if edge.rel == item[1:]:
+                        start = edge.valid_from or self._own_start(src.id)
+                        if start:
+                            found.append(start)
+            else:
+                found += [timeutil.canonical(f.value) for f in self.facts(node_id) if f.key == item]
+        return min(found, key=timeutil.start) if found else None
+
+    def _own_start(self, node_id: str) -> str | None:
+        """The earliest ``valid_from`` among a node's own facts: when a paper
+        was published, when a claim was made."""
+        starts = [f.valid_from for f in self.facts(node_id) if f.valid_from]
+        return min(starts, key=timeutil.start) if starts else None
+
     def list_nodes(self, at: At = NOW, type: str | None = None) -> list[Node]:
         """Nodes in view. Under a time filter, a node is hidden when none of
         its facts or edges (in either direction) are in view; a node that
-        never had any is always shown."""
+        never had any is always shown. Under a valid time, a node whose type
+        says when it starts (``starts`` in the model) is hidden before then,
+        and always when nothing its rule names exists."""
         result = []
         for node in self.nodes.values():
             if type and node.type != type:
                 continue
+            if at.valid_at and self._starts_by_rule(node.type):
+                begins = self.begins(node.id)  # none: nothing it names exists, so neither does it
+                if begins is None or timeutil.start(begins) > timeutil.start(at.valid_at):
+                    continue
             if at.filtered and (node.facts or node.edges or self._g.in_degree(node.id) > 0):
                 incoming = (attrs["edge"] for _, _, attrs in self._g.in_edges(node.id, data=True))
                 if not (
@@ -466,14 +520,17 @@ class Graph:
             result.append(node)
         return result
 
-    def search(self, text: str, at: At = NOW) -> list[Node]:
-        needle = text.casefold()
+    def search(self, text: str, at: At = NOW, type: str | None = None) -> list[Node]:
+        """Nodes whose id, name, type, notes, body, facts or edges contain
+        the text, ignoring case and accents: ``godel`` finds ``Gödel`` and
+        ``gödel`` finds the id ``godel-machine``. ``type`` keeps one node type."""
+        needle = _fold(text)
         hits = []
-        for node in self.list_nodes(at):
+        for node in self.list_nodes(at, type=type):
             haystack = [node.id, node.name, node.type, node.notes, self.body(node.id)]
             haystack += [f"{f.key} {f.value}" for f in self.facts(node.id, at)]
             haystack += [f"{e.rel} {e.to}" for e in self.out_edges(node.id, at)]
-            if any(needle in part.casefold() for part in haystack):
+            if any(needle in _fold(part) for part in haystack):
                 hits.append(node)
         return hits
 
@@ -511,7 +568,9 @@ class Graph:
 
     def check(self) -> list[str]:
         """Problems that hand edits can introduce."""
-        problems = []
+        from bibliotheke import lenses
+
+        problems = lenses.problems(self)  # a view: section naming a type or relation the model lacks
         current: dict[str, int] = {}
         on_disk = self.source.writable  # file placement only means something in a working tree
         for node in self.nodes.values():
@@ -676,6 +735,11 @@ def _modelled():
         yield
     except ModelError as err:
         raise GraphError(str(err)) from None
+
+
+def _fold(text: str) -> str:
+    """Text for matching: lower-cased, accents stripped (``Gödel`` → ``godel``)."""
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
 
 
 def slugify(text: str) -> str:

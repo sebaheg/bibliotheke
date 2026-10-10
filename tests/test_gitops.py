@@ -59,19 +59,22 @@ def git(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def test_check_since_reports_the_model_change(repo):
+def test_check_is_about_the_data_and_model_diff_about_the_model(repo):
     run(repo, "model", "add", "fact", "word", "frequency", "int")
-    result = run(repo, "check", "--since", "HEAD")
-    assert "word.frequency" in result.output and "OK: 1 nodes" in result.output
-    report = run(repo, "check", "--since", "HEAD", "--markdown").output
-    assert "### Model changes since HEAD" in report and "| `+` | `word.frequency` | new fact (int) | additive |" in report
-    assert "OK: 1 nodes." in report
+    result = run(repo, "check")
+    assert "OK: 1 nodes" in result.output and "word.frequency" not in result.output, "check says nothing about history"
+    assert "OK: 1 nodes." in run(repo, "check", "--markdown").output
+    result = run(repo, "model", "diff", "HEAD")
+    assert "word.frequency" in result.output
+    report = run(repo, "model", "diff", "HEAD", "--markdown").output
+    assert "### Model changes, HEAD → working tree" in report and "| `+` | `word.frequency` | new fact (int) | additive |" in report
 
     run(repo, "model", "drop", "edge", "defined_in")
-    assert run(repo, "check", "--since", "HEAD").exit_code == 0, "destructive but nothing breaks"
-    result = run(repo, "check", "--since", "HEAD", "--no-destructive", ok=False)
+    assert run(repo, "check").exit_code == 0
+    assert run(repo, "model", "diff", "HEAD").exit_code == 0, "destructive but nothing breaks"
+    result = run(repo, "model", "diff", "HEAD", "--no-destructive", ok=False)
     assert result.exit_code == 1 and "destructive model change" in result.output
-    report = run(repo, "check", "--since", "HEAD", "--markdown").output
+    report = run(repo, "model", "diff", "HEAD", "--markdown").output
     assert "| `-` | `defined_in` | edge removed | destructive |" in report
 
 
@@ -86,7 +89,8 @@ def test_hook_install_and_run(repo):
     path = repo.parent / ".git" / "hooks" / "pre-commit"
     assert str(path) in result.output and path.is_file() and os.access(path, os.X_OK)
     text = path.read_text()
-    assert gitops.HOOK_MARK in text and '/kg/"' in text and "--since HEAD --no-destructive" in text
+    assert gitops.HOOK_MARK in text and '/kg/"' in text
+    assert "$BIB check || exit 1" in text and "model diff HEAD --no-destructive" in text
     run(repo, "hook", "install"), "reinstalling is fine"
     assert "Removed" in run(repo, "hook", "remove").output and not path.exists()
     assert "No hook" in run(repo, "hook", "remove").output
@@ -100,7 +104,7 @@ def test_ci_workflow(repo):
     data = yaml.safe_load(text)
     assert data["jobs"]["check"]["defaults"]["run"]["working-directory"] == "kg"
     assert {"run": "pip install git+https://example.com/bib.git"} in data["jobs"]["check"]["steps"]
-    assert "bib check ${since:+--since \"$since\"} --markdown > report.md" in text
+    assert "bib check --markdown > report.md" in text and 'bib model diff "$since" --markdown >> report.md' in text
     assert data["permissions"] == {"contents": "read", "pull-requests": "write"}
     top = run(repo.parent / "kg", "ci").output  # default install line
     assert "pip install bibliotheke" in top
@@ -119,8 +123,9 @@ def test_model_log_lists_model_changes_with_their_meaning(repo):
     git(repo, "commit", "-qm", "drop edge")
     result = run(repo, "model", "log")
     lines = [line for line in result.output.splitlines() if line.strip()]
-    assert [line.split()[2] for line in lines[1:]] == ["drop", "frequency", "one"], "view-only commit is left out"
-    assert "-1: defined_in" in lines[1] and "+1: word.frequency" in lines[2] and "a model was added" in run(repo, "model", "log", "--json").output
+    assert lines[-1].startswith("+ additive"), "a legend closes the table"
+    assert [line.split()[2] for line in lines[1:-1]] == ["drop", "frequency", "one"], "view-only commit is left out"
+    assert "-1 defined_in" in lines[1] and "+1 word.frequency" in lines[2] and "a model was added" in run(repo, "model", "log", "--json").output
     entries = yaml.safe_load(run(repo, "model", "log", "--json", "--max", "2").output)
     assert [e["subject"] for e in entries] == ["drop edge"] , "--max counts commits touching the model files, before filtering"
 

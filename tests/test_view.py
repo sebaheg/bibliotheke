@@ -210,7 +210,7 @@ async def test_lenses_switch_the_picture(tmp_path):
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause(0.2)
         assert "All" in app.sub_title
-        await pilot.press("2")
+        await pilot.press("j")  # the digits belong to the legend
         await pilot.pause(0.3)
         assert app.lens.name == "Work" and "Work" in app.sub_title
         assert [e.rel for e in app.scene.edge_records] == ["works_at"]
@@ -220,3 +220,150 @@ async def test_lenses_switch_the_picture(tmp_path):
         await pilot.pause(0.3)
         assert app.lens.name == "All" and len(app.scene.edges) == 2
         assert len(app.pictures) == 2, "each lens is built once and kept"
+
+
+def test_hide_leaves_out_a_node_type(tmp_path):
+    graph = people(tmp_path)
+    scene = build_scene(graph, At(), "type", hide=["organisation"])
+    assert [n.id for n in scene.nodes] == ["anna-berg", "bo-ek"]
+    assert scene.edges == [(1, 0)], "the edge to the hidden organisation goes with it"
+    assert "organisation" not in scene.legend
+    app = GraphView(graph, At(), "type", hide=["organisation"])
+    assert len(app.scene.nodes) == 2
+
+
+def test_plotui_theme_is_the_default_and_styles_the_chrome(tmp_path):
+    from bibliotheke import tui
+    from bibliotheke.lenses import DEFAULT_THEME
+    from bibliotheke.view import Lens, Picture
+
+    assert DEFAULT_THEME == "plotui" and Lens("x").theme is THEMES["plotui"]
+    theme = THEMES["plotui"]
+    assert theme.palette[:3] == [(230, 60, 120), (69, 200, 209), (240, 161, 60)], "plotui's own colour way leads"
+    assert theme.canvas == (11, 14, 17) and theme.swatch == "square" and theme.frame == theme.grid
+    graph = people(tmp_path)
+    picture = Picture(graph, At(), Lens("x"))
+    assert [entry[1] for entry in picture.plot.legend_entries()] == ["square", "square"]
+    app = GraphView(graph, At())
+    assert app.theme == "plotui" and tui.THEME.name in app.available_themes
+
+
+def test_dracula_theme_colours_the_graph_and_the_chrome(tmp_path):
+    from bibliotheke import tui
+    from bibliotheke.view import Lens
+
+    theme = theme_for("dracula")
+    assert theme.canvas == (0x0C, 0x0C, 0x11), "plotui-dark, not Dracula's grey #282a36"
+    assert theme.palette[:3] == [(0xFF, 0x79, 0xC6), (0x8B, 0xE9, 0xFD), (0xFF, 0xB8, 0x6C)]
+    graph = people(tmp_path)
+    app = GraphView(graph, At(), theme=theme)
+    assert app.theme == tui.DRACULA.name
+    app = GraphView(graph, At(), lenses=[Lens("a"), Lens("b", theme=theme)])
+    assert app.theme == "plotui"
+    app._adopt(app._picture(1))
+    assert app.theme == tui.DRACULA.name, "a Dracula lens brings Dracula's chrome"
+
+
+def test_labels_start_hidden_and_t_toggles_them(tmp_path):
+    graph = people(tmp_path)
+    app = GraphView(graph, At(), theme=theme_for("plotui", labels=2))
+    picture = app.picture
+    assert picture.labels and not picture.labels_shown and not app.labels_on
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.press("t")
+            assert app.labels_on and picture.labels_shown
+            await pilot.press("t")
+            assert not app.labels_on and not picture.labels_shown
+
+    import asyncio
+    asyncio.run(run())
+
+
+def test_color_by_one_types_key_leaves_the_rest_by_type(tmp_path):
+    graph = Graph.init(tmp_path)
+    graph.add_node("paper", "P")
+    graph.add_fact("p", "kind", "method")
+    graph.add_node("claim", "C1")
+    graph.add_fact("c1", "kind", "result")
+    graph.add_node("claim", "C2")
+    graph.add_fact("c2", "kind", "prediction")
+    graph.add_node("concept", "X")
+    for claim in ("c1", "c2"):
+        graph.add_edge(claim, "made_in", "p")
+        graph.add_edge(claim, "about", "x")
+    scene = build_scene(graph, At(), color_by="claim.kind")
+    assert dict(zip([n.id for n in scene.nodes], scene.categories)) == {
+        "c1": "result", "c2": "prediction", "p": "paper", "x": "concept"
+    }
+    # Only what the lens can draw shares the palette: a hidden paper and
+    # its kind take no colour, so the three left get three distinct ones.
+    scene = build_scene(graph, At(), color_by="claim.kind", rels=["about"], hide=["paper"])
+    assert sorted(scene.legend) == ["concept", "prediction", "result"]
+    assert len(set(scene.legend.values())) == 3
+
+
+def test_tree_follows_a_relation_that_points_up(tmp_path):
+    graph = Graph.init(tmp_path)
+    graph.add_node("paper", "P")
+    for i in range(5):
+        graph.add_node("claim", f"C{i}")
+        graph.add_edge(f"c{i}", "made_in", "p")
+    from bibliotheke.view import tree_layout
+
+    scene = build_scene(graph, At(), rels=["made_in"], tree="made_in")
+    positions = tree_layout(graph, scene, "made_in")
+    assert len(set(positions)) == len(positions), "every claim has its own place"
+
+
+def test_time_bar_flips_between_valid_and_known_time(tmp_path):
+    import asyncio
+    from bibliotheke.view import TimeSlider, time_span
+
+    graph = Graph.init(tmp_path)
+    graph.add_node("person", "Anna Berg")
+    graph.add_node("person", "Bo Ek")
+    graph.add_fact("anna-berg", "field", "ai", valid_from=2010, known_at="2020-01-01")
+    graph.add_fact("bo-ek", "field", "ai", valid_from=2015, known_at="2026-01-01")
+    records = [r for n in graph.nodes.values() for r in n.facts]
+    assert time_span(records, "known")[0].year == 2020 and time_span(records)[0].year == 2010
+    app = GraphView(graph, At())
+    assert app.time_axis == "valid"
+
+    async def run():
+        async with app.run_test() as pilot:
+            slider = app.query_one("#time", TimeSlider)
+            await pilot.press("a")
+            assert app.time_axis == "known" and slider.axis == "known"
+            assert app.at.valid_at is None and app.at.known_at is not None
+            assert all(app.node_visible), "at its end the known axis shows everything"
+            slider.set_fraction(0.0, by_user=True)  # back to 2020: Bo Ek was not known yet
+            await pilot.pause()
+            assert dict(zip([n.id for n in app.scene.nodes], app.node_visible)) == {"anna-berg": True, "bo-ek": False}
+            await pilot.press("a")
+            assert app.time_axis == "valid" and app.at.known_at is None and all(app.node_visible)
+
+    asyncio.run(run())
+
+
+def test_a_click_on_the_time_bar_gives_it_the_arrows(tmp_path):
+    import asyncio
+    from bibliotheke.view import TimeSlider
+
+    graph = people(tmp_path)
+    app = GraphView(graph, At())
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            slider = app.query_one("#time", TimeSlider)
+            await pilot.click("#time", offset=(40, 0))
+            start = slider.fraction
+            await pilot.press("left", "left")
+            assert app.time_keys and abs(slider.fraction - (start - 0.02)) < 1e-9
+            await pilot.click("#plot", offset=(30, 10))  # the plot takes the arrows back
+            moved = slider.fraction
+            await pilot.press("left")
+            assert not app.time_keys and slider.fraction == moved
+
+    asyncio.run(run())

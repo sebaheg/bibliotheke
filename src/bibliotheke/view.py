@@ -23,8 +23,9 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Footer, Header, Static
 
-from bibliotheke import timeutil
+from bibliotheke import timeutil, tui
 from bibliotheke.graph import At, Graph
+from bibliotheke.lenses import DEFAULT_THEME
 from bibliotheke.model import Edge, Node, Record
 
 RGB = tuple[int, int, int]
@@ -54,29 +55,124 @@ class Theme:
     # Edge colour per relation. A relation not named here takes its
     # endpoints' colours (styled) or ``edge`` (classic).
     edge_colors: dict[str, RGB] = field(default_factory=dict)
+    # The chrome (what is not data): legend box fill and border, grid, tick
+    # ink and legend text. None keeps plotui's own, lifted from ``canvas``.
+    legend_bg: RGB | None = None
+    frame: RGB | None = None
+    grid: RGB | None = None
+    ink: RGB | None = None
+    ink_bright: RGB | None = None
+    swatch: str = "disc"  # legend swatch shape: square, disc, ring, dot…
+    globe: str = "dark"  # the Earth on a globe lens: dark, earth, light, blueprint or wire
+    chrome: str = "plotui"  # the window around the plot: a name in tui.THEMES
+
+
+def _rgb(hex: str) -> RGB:
+    return (int(hex[1:3], 16), int(hex[3:5], 16), int(hex[5:7], 16))
 
 
 THEMES = {
-    # A network map: near-black canvas, bright nodes sized by degree, thin
-    # translucent edges in their endpoints' colours, nodes always on top.
-    "map": Theme(
+    # plotui's own design, as on plotui.xyz: a near-black blue-grey canvas,
+    # the pink / cyan / orange trio leading an eight-colour way, flat dots a
+    # little bigger than the map theme's, quiet translucent edges, and a
+    # legend that is a rounded panel with square chips, its border a
+    # hairline barely lighter than the canvas.
+    "plotui": Theme(
         palette=[
-            (79, 195, 247), (102, 217, 166), (255, 209, 102), (186, 148, 255), (255, 121, 121),
-            (240, 240, 244), (94, 129, 244), (160, 220, 90), (255, 160, 200), (130, 230, 230),
+            (230, 60, 120),  # pink
+            (69, 200, 209),  # cyan
+            (240, 161, 60),  # orange
+            (144, 133, 233),  # violet
+            (25, 158, 112),  # green
+            (201, 133, 0),  # gold
+            (57, 135, 229),  # blue
+            (230, 103, 103),  # red
         ],
-        edge=(240, 240, 248),
-        edge_dim=(30, 32, 38),
-        canvas=(17, 18, 21),
+        edge=_rgb(tui.BODY),
+        edge_dim=_rgb(tui.GRID),
+        canvas=_rgb(tui.CANVAS),
         styled=True,
         edge_alpha=0.32,
-        edge_width=0.7,
+        edge_width=0.6,
         fog=0.25,
-        halo=0.6,
-        size_min=1.8,
-        size_step=1.15,
-        size_max=9.0,
+        halo=0.0,
+        size_min=2.4,
+        size_step=1.0,
+        size_max=8.0,
         labels=16,
         label_size=0.72,
+        legend_bg=(14, 18, 22),
+        frame=_rgb(tui.GRID),
+        grid=_rgb(tui.GRID),
+        ink=_rgb(tui.INK),
+        ink_bright=_rgb(tui.BODY),
+        swatch="square",
+    ),
+    # A network map: a near-black blue canvas, flat nodes in pastel neons
+    # (soft but luminous against the dark, the way a protein viewer or a
+    # dark-mode code editor colours things), thin translucent edges in their
+    # endpoints' colours, no glow, nodes always on top.
+    "map": Theme(
+        palette=[
+            (255, 184, 108),  # orange
+            (124, 227, 139),  # green
+            (111, 211, 255),  # cyan
+            (255, 126, 182),  # pink
+            (200, 162, 255),  # lavender
+            (255, 230, 102),  # yellow
+            (120, 240, 220),  # mint
+            (255, 140, 120),  # coral
+            (160, 200, 255),  # periwinkle
+            (225, 225, 235),  # chalk
+        ],
+        edge=(235, 235, 245),
+        edge_dim=(30, 33, 40),
+        canvas=(13, 16, 22),
+        styled=True,
+        edge_alpha=0.38,
+        edge_width=0.6,
+        fog=0.25,
+        halo=0.0,
+        size_min=1.8,
+        size_step=1.1,
+        size_max=8.0,
+        labels=16,
+        label_size=0.72,
+    ),
+    # The Dracula theme (draculatheme.com) on a plotui-dark canvas tinted
+    # Dracula's purple (its own backgrounds read as grey behind a graph), its seven accents leading the colour way, comment blue last,
+    # and the window chrome in the same colours.
+    "dracula": Theme(
+        palette=[
+            _rgb(tui.DRACULA_COLORS.PINK),
+            _rgb(tui.DRACULA_COLORS.CYAN),
+            _rgb(tui.DRACULA_COLORS.ORANGE),
+            _rgb(tui.DRACULA_COLORS.PURPLE),
+            _rgb(tui.DRACULA_COLORS.GREEN),
+            _rgb(tui.DRACULA_COLORS.YELLOW),
+            _rgb(tui.DRACULA_COLORS.RED),
+            _rgb(tui.DRACULA_COLORS.COMMENT),
+        ],
+        edge=_rgb(tui.DRACULA_COLORS.FOREGROUND),
+        edge_dim=_rgb(tui.DRACULA_COLORS.GRID),
+        canvas=_rgb(tui.DRACULA_COLORS.CANVAS),
+        styled=True,
+        edge_alpha=0.32,
+        edge_width=0.6,
+        fog=0.25,
+        halo=0.0,
+        size_min=2.4,
+        size_step=1.0,
+        size_max=8.0,
+        labels=16,
+        label_size=0.72,
+        legend_bg=_rgb(tui.DRACULA_COLORS.PANEL),
+        frame=_rgb(tui.DRACULA_COLORS.FRAME),
+        grid=_rgb(tui.DRACULA_COLORS.GRID),
+        ink=_rgb(tui.DRACULA_COLORS.COMMENT),
+        ink_bright=_rgb(tui.DRACULA_COLORS.FOREGROUND),
+        swatch="square",
+        chrome="dracula",
     ),
     # The original look: transparent background, hard edges, flat grey lines.
     "classic": Theme(
@@ -93,6 +189,7 @@ SETTLED = 1e-3
 WARMUP_STEPS = 120
 WARMUP_ENERGY = 0.03  # mean movement per step, in layout units, below which the shape is there
 WARMUP_SECONDS = 0.5
+TICK_FPS = 60  # layout steps (and frames) per second while the graph settles
 TIME_STEP = 0.01  # share of the time span one key press moves
 TIME_JUMP = 0.1  # with shift
 PLAY_FPS = 15
@@ -125,6 +222,8 @@ def build_scene(
     label: Callable[[Node], str] | None = None,
     tree: str | None = None,
     min_parallel: int = 1,
+    hide: list[str] | None = None,
+    linked_only: bool = False,
 ) -> Scene:
     """What to draw. ``rels`` keeps only edges of those relations, and then
     only nodes that take part in one of them (or in the ``tree`` relation,
@@ -134,8 +233,12 @@ def build_scene(
     so a long tail can fold into one legend row; ``weight`` gives a node's
     size (and its claim to a label), by default how many distinct nodes it
     is drawn linked to; ``label`` gives a node's label text, by default its
-    short name."""
+    short name. ``hide`` leaves out whole node types (a graph where one
+    type is most of the nodes, such as claims, is easier read without them);
+    ``linked_only`` leaves out every node that ends up with no edge drawn."""
     nodes = sorted(graph.list_nodes(at), key=lambda n: n.id)
+    if hide:
+        nodes = [node for node in nodes if node.type not in set(hide)]
     if rels:
         shown = set(rels) | ({tree} if tree else set())
         tree_types = set()
@@ -160,7 +263,7 @@ def build_scene(
             if edge.to in index and edge.to != node.id:
                 edges.append((index[node.id], index[edge.to]))
                 edge_records.append(edge)
-    if min_parallel > 1:
+    if min_parallel > 1 or linked_only:
         # Keep the pairs joined often enough, then only the nodes they link.
         count = Counter((min(a, b), max(a, b)) for a, b in edges)
         kept = [k for k, (a, b) in enumerate(edges) if count[(min(a, b), max(a, b))] >= min_parallel]
@@ -172,16 +275,18 @@ def build_scene(
         edges = [(remap[edges[k][0]], remap[edges[k][1]]) for k in kept]
     group = group or (lambda category: category)
     categories = [group(_category(graph, node, at, color_by)) for node in nodes]
-    # Colours come from every category the graph has ever had, so a category
-    # keeps its colour whichever point in time is being viewed.
-    known = {node.type for node in graph.nodes.values()}
-    if color_by != "type":
-        known |= {str(f.value) for n in graph.nodes.values() for f in n.facts if f.key == color_by}
-        known |= {e.to for n in graph.nodes.values() for e in n.edges if e.rel == color_by}
-    known = {group(category) for category in known}
-    palette = theme.palette
-    colors = {category: palette[i % len(palette)] for i, category in enumerate(sorted(known))}
-    colors.update({k: v for k, v in theme.overrides.items() if k in colors})
+    # Colours come from every category this lens could ever draw (whatever
+    # the time, so a category keeps its colour as the time bar moves), and
+    # only those: a hidden type or another type's facts take no colour.
+    hidden = set(hide or ())
+    if rels:
+        touching = {n.id for n in graph.nodes.values() for e in n.edges if e.rel in shown}
+        touching |= {e.to for n in graph.nodes.values() for e in n.edges if e.rel in shown}
+        drawable = {t for t in {n.type for n in graph.nodes.values() if n.id in touching} | tree_types if t not in hidden}
+    else:
+        drawable = {n.type for n in graph.nodes.values()} - hidden
+    pool = [n for n in graph.nodes.values() if n.type in drawable]
+    colors = category_colors(graph, pool, color_by, theme, group)
     legend = {category: colors[category] for category in sorted(set(categories))}
     if weight is None:  # how many distinct nodes each is drawn linked to
         linked: list[set[int]] = [set() for _ in nodes]
@@ -231,25 +336,37 @@ GAP = 0.25
 def tree_layout(graph: Graph, scene: Scene, rel: str = "contains") -> list[tuple[float, float, float]]:
     """A still 3D layout from a hierarchy: a balloon tree.
 
-    Every node that is the source of a ``rel`` edge is a *branch* (a
-    directory); every other node with a parent is a *leaf* (a file). A
+    Every node that is the parent end of a ``rel`` edge is a *branch* (a
+    directory); every other node with a parent is a *leaf* (a file). The
+    parent end is the source when the relation fans out (a directory
+    ``contains`` files) and the target when it fans in (claims are each
+    ``made_in`` one source, a source holds many). A
     branch keeps its leaves on a small sphere around itself and its child
     branches on a larger one, each child given a cap of that sphere big
     enough for its whole subtree, so subtrees never overlap. A child branch
     sits on the hemisphere facing away from its own parent, which makes the
     tree radiate from the centre. Branches with no parent hang off a virtual
     root at the origin. Nodes outside the hierarchy sit near the nodes they
-    are linked to, or on the rim when linked to nothing.
+    are linked to, spread out where several would share a place, or on the
+    rim when linked to nothing.
     """
     index = {node.id: i for i, node in enumerate(scene.nodes)}
     n = len(scene.nodes)
+    pairs = [
+        (index[node.id], index[e.to], e)
+        for node in scene.nodes
+        for e in graph.out_edges(node.id, at=None)
+        if e.rel == rel and e.to in index and e.to != node.id
+    ]
+    # Which end is the parent: the one that has many of the other.
+    fan_out = Counter(a for a, _, _ in pairs)
+    fan_in = Counter(b for _, b, _ in pairs)
+    upward = sum(c > 1 for c in fan_in.values()) > sum(c > 1 for c in fan_out.values())
     parent: dict[int, int] = {}
-    for node in scene.nodes:
-        edges = [e for e in graph.out_edges(node.id, at=None) if e.rel == rel and e.to in index]
-        for edge in edges:
-            child = index[edge.to]
-            if child != index[node.id] and (child not in parent or edge.valid_to is None):
-                parent[child] = index[node.id]
+    for a, b, edge in pairs:
+        up, child = (b, a) if upward else (a, b)
+        if child not in parent or edge.valid_to is None:
+            parent[child] = up
     branches = {p for p in parent.values()}
     children: dict[int, list[int]] = {b: [] for b in branches}
     leaves: dict[int, list[int]] = {b: [] for b in branches}
@@ -349,6 +466,18 @@ def tree_layout(graph: Graph, scene: Scene, rel: str = "contains") -> list[tuple
                 length = math.sqrt(cx * cx + cy * cy + cz * cz) or 1.0
                 push = GAP * 2
                 pos[i] = (cx + cx / length * push, cy + cy / length * push, cz + cz / length * push)
+    # Loose nodes linked to the same nodes land on one spot: fan them out
+    # on a small sphere around it, so each can be seen and clicked.
+    spots: dict[tuple[float, float, float], list[int]] = {}
+    for i in loose:
+        if pos[i] is not None:
+            spots.setdefault(pos[i], []).append(i)
+    for spot, group in spots.items():
+        if len(group) > 1:
+            r = max(FILE_SHELL_MIN, FILE_SPACING * math.sqrt(len(group)))
+            for k, i in enumerate(group):
+                d = _fibonacci(k, len(group), True)
+                pos[i] = (spot[0] + d[0] * r, spot[1] + d[1] * r, spot[2] + d[2] * r)
     for k, i in enumerate(j for j in loose if pos[j] is None):
         d = _fibonacci(k, max(1, len(loose)), True)
         pos[i] = (d[0] * rim, d[1] * rim, d[2] * rim)
@@ -409,10 +538,46 @@ def fit(xs: list[float], ys: list[float], zs: list[float]) -> tuple[list[float],
     return tuple([v / extent for v in axis] for axis in centred)
 
 
+def category_colors(
+    graph: Graph, pool: list[Node], color_by: str, theme: Theme, group: Callable[[str], str] | None = None
+) -> dict[str, RGB]:
+    """A colour for every category the ``pool`` of nodes could ever show,
+    whatever the time (so a category keeps its colour as the time bar
+    moves): the palette in category order, then the theme's overrides."""
+    group = group or (lambda category: category)
+    scope, key = split_color_by(graph, color_by)
+    known = {node.type for node in pool if node.type != scope}
+    if key != "type":
+        within = [n for n in pool if scope is None or n.type == scope]
+        known |= {str(f.value) for n in within for f in n.facts if f.key == key}
+        known |= {e.to for n in within for e in n.edges if e.rel == key}
+        if scope is not None:  # a scoped node without the key falls back to its type
+            known |= {n.type for n in within if not any(f.key == key for f in n.facts)}
+    known = {group(category) for category in known}
+    palette = theme.palette
+    colors = {category: palette[i % len(palette)] for i, category in enumerate(sorted(known))}
+    colors.update({k: v for k, v in theme.overrides.items() if k in colors})
+    return colors
+
+
+def split_color_by(graph: Graph, color_by: str) -> tuple[str | None, str]:
+    """``claim.kind`` is ``("claim", "kind")``: colour claims by kind and
+    every other node by its type (a paper's ``kind`` means something else).
+    A plain ``kind`` applies to every type: ``(None, "kind")``."""
+    scope, dot, key = color_by.partition(".")
+    if dot and key and scope in {node.type for node in graph.nodes.values()}:
+        return scope, key
+    return None, color_by
+
+
 def _category(graph: Graph, node: Node, at: At, color_by: str) -> str:
     """A fact's value, or for an edge its target's id, so that a target (a
     word class, say) shares the colour of the nodes that point to it. Nodes
-    with neither fall back to their type."""
+    with neither fall back to their type, as do nodes outside the type a
+    ``type.key`` colouring names."""
+    scope, color_by = split_color_by(graph, color_by)
+    if scope is not None and node.type != scope:
+        return node.type
     if color_by != "type":
         for fact in graph.facts(node.id, at):
             if fact.key == color_by:
@@ -458,10 +623,12 @@ def short_name(name: str) -> str:
 
 
 def label_texts(nodes: list[Node], degree: list[float], count: int, texts: list[str] | None = None) -> list[str]:
-    """Short names for the ``count`` best-connected nodes, '' for the rest."""
-    ranked = sorted(range(len(nodes)), key=lambda i: (-degree[i], nodes[i].id))[:count]
-    chosen = {i for i in ranked if degree[i] > 0}
+    """Short names for the ``count`` best-connected nodes, '' for the rest.
+    A node whose text is '' (a type the lens does not label) is passed over
+    rather than counted."""
     texts = texts or [short_name(node.name) for node in nodes]
+    candidates = [i for i in range(len(nodes)) if texts[i] and degree[i] > 0]
+    chosen = set(sorted(candidates, key=lambda i: (-degree[i], nodes[i].id))[:count])
     return [texts[i] if i in chosen else "" for i in range(len(nodes))]
 
 
@@ -471,11 +638,18 @@ def node_size(theme: Theme, degree: float) -> float:
     return theme.size_min + min(degree, 8) * theme.size_step
 
 
-def time_span(records: list[Record]) -> tuple[datetime, datetime] | None:
-    """The first and last instants the records' valid times name, or None
-    when none of them is dated."""
-    starts = [timeutil.start(r.valid_from) for r in records if r.valid_from]
-    ends = [timeutil.end(r.valid_to) for r in records if r.valid_to]
+TIME_AXES = ("valid", "known")  # what the time bar can move: valid time (default) or knowledge time
+
+
+def time_span(records: list[Record], axis: str = "valid") -> tuple[datetime, datetime] | None:
+    """The first and last instants the records' valid times name (``axis``
+    "valid"), or when they were learned ("known"); None when none is dated."""
+    if axis == "known":
+        starts = [timeutil.start(r.known_at) for r in records if r.known_at]
+        ends: list[datetime] = []
+    else:
+        starts = [timeutil.start(r.valid_from) for r in records if r.valid_from]
+        ends = [timeutil.end(r.valid_to) for r in records if r.valid_to]
     if not starts and not ends:
         return None
     first = min(starts) if starts else min(ends)
@@ -484,9 +658,10 @@ def time_span(records: list[Record]) -> tuple[datetime, datetime] | None:
 
 
 class TimeSlider(Widget):
-    """One line: the span's ends, a bar with a handle, and the time under
-    the handle. Drag or click the bar, or step it with ←/→ (shift: jumps)
-    while it has focus; every change posts :class:`Changed`."""
+    """One line: the axis it moves (valid or known time), the span's ends,
+    a bar with a handle, and the time under the handle. Drag or click the
+    bar, or step it with ←/→ (shift: jumps) while it has focus; every change
+    posts :class:`Changed`."""
 
     DEFAULT_CSS = """
     TimeSlider { height: 1; padding: 0 1; background: $panel; }
@@ -504,11 +679,20 @@ class TimeSlider(Widget):
             self.when = when
             self.by_user = by_user
 
-    def __init__(self, first: datetime, last: datetime, when: datetime | None = None, id: str | None = None) -> None:
+    def __init__(
+        self, first: datetime, last: datetime, when: datetime | None = None, id: str | None = None, axis: str = "valid"
+    ) -> None:
         super().__init__(id=id)
         self.first, self.last = first, last
+        self.axis = axis
         self.fraction = 1.0 if when is None else self.fraction_of(when)
         self._dragging = False
+
+    def retarget(self, first: datetime, last: datetime, axis: str) -> None:
+        """Move another axis over another span, the handle at its end (now)."""
+        self.first, self.last, self.axis = first, last, axis
+        self.fraction = 1.0
+        self.refresh()
 
     def fraction_of(self, when: datetime) -> float:
         span = (self.last - self.first).total_seconds()
@@ -530,14 +714,15 @@ class TimeSlider(Widget):
 
     def _bar(self) -> tuple[int, int]:
         """Column where the bar starts (inside the padding) and its width."""
-        left = len(_day(self.first)) + 1
+        left = len(self.axis) + 1 + len(_day(self.first)) + 1
         width = max(3, self.size.width - 2 - left - len(_day(self.last)) - 1 - 12)
         return left, width
 
     def render(self) -> Text:
         left, width = self._bar()
         at = round(self.fraction * (width - 1))
-        text = Text(_day(self.first) + " ", style="dim")
+        text = Text(self.axis + " ", style="bold")
+        text.append(_day(self.first) + " ", style="dim")
         text.append("━" * at, style="bold")
         text.append("●", style="bold")
         text.append("━" * (width - 1 - at), style="dim")
@@ -586,13 +771,23 @@ class Lens:
     rels: list[str] | None = None
     tree: str | None = None  # a hierarchy relation: a still tree instead of a force layout
     color_by: str = "type"
-    theme: Theme = THEMES["map"]
+    theme: Theme = THEMES[DEFAULT_THEME]
     group: Callable[[str], str] | None = None
     weight: Callable[[Node], float] | None = None
     label: Callable[[Node], str] | None = None
     # Draw a pair of nodes only when at least this many edges join them, and
     # leave out nodes left with nothing: a coupling that happened once is noise.
     min_parallel: int = 1
+    hide: list[str] | None = None  # node types left out altogether
+    # Legend rows: None for every category drawn, a list for just those
+    # (a row left out is still drawn, only unlisted), empty for no legend.
+    legend: list[str] | None = None
+    linked_only: bool = False  # leave out nodes with no edge drawn
+    # A globe lens: see bibliotheke.lenses.Spec and bibliotheke.geo.
+    globe: bool = False
+    place: list[str] | None = None
+    via: list[str] | None = None
+    arcs: str | list[str] = "shared"
 
 
 class Picture:
@@ -606,14 +801,19 @@ class Picture:
         self.lens = lens
         self.look = theme
         self.scene = build_scene(
-            graph, at, lens.color_by, theme, lens.rels, lens.group, lens.weight, lens.label, lens.tree, lens.min_parallel
+            graph, at, lens.color_by, theme, lens.rels, lens.group, lens.weight, lens.label, lens.tree, lens.min_parallel, lens.hide,
+            lens.linked_only,
         )
+        # The legend's rows, in order: what a legend click's entry index means.
+        self.legend_rows = [c for c in self.scene.legend if lens.legend is None or c in lens.legend]
         self.plot = Plot()
         self.handle: int | None = None
         self.energy = float("inf")
         self.layout: ForceLayout | None = None
         self.still: list[tuple[float, float, float]] = []
         self.base: list[RGB] = []
+        self.labels: list[str] | None = None  # node labels, for when they are shown
+        self.labels_shown = False
         scene = self.scene
         if not scene.nodes:
             return
@@ -634,14 +834,22 @@ class Picture:
             # large graphs.
             started = time.monotonic()
             for _ in range(WARMUP_STEPS):
-                if self.layout.step() < WARMUP_ENERGY or time.monotonic() - started > WARMUP_SECONDS:
+                self.energy = self.layout.step()
+                if self.energy < WARMUP_ENERGY or time.monotonic() - started > WARMUP_SECONDS:
                     break
         self.plot.set_show_box(False)
         reach = 0.82 if theme.styled else 1.15
         self.plot.set_bounds((-reach, -reach, -reach), (reach, reach, reach))
         if theme.canvas:
             lift = tuple(min(255, c + 14) for c in theme.canvas)
-            self.plot.set_chrome(canvas=theme.canvas, bg=lift, frame=tuple(min(255, c + 40) for c in theme.canvas))
+            self.plot.set_chrome(
+                canvas=theme.canvas,
+                bg=theme.legend_bg or lift,
+                frame=theme.frame or tuple(min(255, c + 40) for c in theme.canvas),
+                grid=theme.grid,
+                ink=theme.ink,
+                ink_bright=theme.ink_bright,
+            )
         xs, ys, zs = self.positions()
         self.handle = self.plot.add_graph3d(
             xs, ys, zs,
@@ -659,12 +867,14 @@ class Picture:
                 halo=theme.halo,
                 label_size=theme.label_size,
             )
-            if theme.labels:
-                self.plot.set_graph_labels(self.handle, label_texts(scene.nodes, scene.weights, theme.labels, scene.labels))
+            if theme.labels:  # drawn only while the view's labels are on (t)
+                self.labels = label_texts(scene.nodes, scene.weights, theme.labels, scene.labels)
         self.plot.set_legend_entries(
-            [(category, "disc", color, None, True) for category, color in scene.legend.items()]
+            [(category, theme.swatch, scene.legend[category], None, True) for category in self.legend_rows]
         )
         self.plot.set_legend_corner("top-left")
+        if hasattr(Plot, "legend_keys"):
+            self.plot.legend_keys = True  # 1–9 show and hide the rows
 
     def positions(self) -> tuple[list[float], ...]:
         n = len(self.scene.nodes)
@@ -696,9 +906,21 @@ def resting_edges(theme: Theme, scene: Scene, edge_valid: list[bool], base: list
     return colors
 
 
+
+def _show_labels(picture: "Picture", on: bool) -> bool:
+    """Draw a picture's node labels or clear them; whether anything changed."""
+    want = on and picture.labels is not None and picture.handle is not None
+    if want == picture.labels_shown:
+        return False
+    if picture.handle is not None:
+        picture.plot.set_graph_labels(picture.handle, picture.labels if want else None)
+    picture.labels_shown = want
+    return True
+
 class GraphView(App):
+    ENABLE_COMMAND_PALETTE = False  # no ^p palette: the keys are the whole interface
     CSS = """
-    HeaderIcon { display: none; }  /* the command-palette button; ^p still opens it */
+    HeaderIcon { display: none; }
     #body { height: 1fr; }
     #plot { width: 1fr; height: 1fr; }
     #sidebar { width: 44; height: 1fr; background: $panel; border-left: thick $accent; padding: 0 1; display: none; }
@@ -708,20 +930,27 @@ class GraphView(App):
         ("q", "quit", "Quit"),
         ("i", "toggle_sidebar", "Details"),
         ("f", "focus", "Focus"),
+        ("t", "toggle_labels", "Labels"),
         ("space", "play", "Play"),
+        ("a", "time_axis", "Valid/known"),
         ("question_mark", "help", "Keys"),
         # Priority, or the screen's own tab bindings (focus cycling) win.
         Binding("tab", "next_lens", "Next lens", priority=True),
         Binding("shift+tab", "previous_lens", "Previous lens", priority=True, show=False),
         Binding("j", "next_lens", "Next lens", show=False),
         Binding("k", "previous_lens", "Previous lens", show=False),
-        *[Binding(str(n), f"lens({n})", f"Lens {n}", show=False) for n in range(1, 10)],
         Binding("r", "reset_view", "Reset view", show=False),
         Binding("escape", "deselect", "Deselect", show=False),
         Binding("comma", "step_time(-1)", "Earlier", show=False),
         Binding("full_stop", "step_time(1)", "Later", show=False),
         Binding("less_than_sign", "step_time(-10)", "Much earlier", show=False),
         Binding("greater_than_sign", "step_time(10)", "Much later", show=False),
+        # After a click on the time bar the arrows move it, in every lens,
+        # until a click on the plot hands them back (see check_action).
+        Binding("left", "arrow_time(-1)", "Earlier", show=False, priority=True),
+        Binding("right", "arrow_time(1)", "Later", show=False, priority=True),
+        Binding("shift+left", "arrow_time(-10)", "Much earlier", show=False, priority=True),
+        Binding("shift+right", "arrow_time(10)", "Much later", show=False, priority=True),
     ]
 
     def __init__(
@@ -729,30 +958,37 @@ class GraphView(App):
         graph: Graph,
         at: At,
         color_by: str = "type",
-        theme: Theme = THEMES["map"],
+        theme: Theme = THEMES[DEFAULT_THEME],
         rels: list[str] | None = None,
         group: Callable[[str], str] | None = None,
         weight: Callable[[Node], float] | None = None,
         label: Callable[[Node], str] | None = None,
         tree: str | None = None,
         lenses: list[Lens] | None = None,
+        hide: list[str] | None = None,
     ) -> None:
         """One lens from the arguments, or several given as ``lenses`` (the
-        first is shown; the number keys switch). ``tree`` names a hierarchy
+        first is shown; j/k and tab switch). ``tree`` names a hierarchy
         relation: the layout is then the still balloon tree of
-        :func:`tree_layout` rather than a force simulation."""
+        :func:`tree_layout` rather than a force simulation; ``hide`` leaves
+        out node types."""
         super().__init__()
         self.graph = graph
         self.at = at
-        self.lenses = lenses or [Lens("Graph", "", rels, tree, color_by, theme, group, weight, label)]
+        self.lenses = lenses or [Lens("Graph", "", rels, tree, color_by, theme, group, weight, label, hide=hide)]
+        tui.style(self, self.lenses[0].theme.chrome)
         self.pictures: dict[int, Picture] = {}
         self.lens_index = 0
         self.switching = False
         self.focus = False  # hovering dims everything but a node's neighbourhood
+        self.labels_on = False  # node names drawn on the graph; t toggles
+        self.time_keys = False  # the arrows step the time bar: set by a click on it, cleared by one on the plot
         self.pinned: int | None = None  # the node focus is held on, after a click
-        self.span = time_span(
-            [r for node in graph.nodes.values() for r in (*node.facts, *node.edges) if r.superseded_at is None]
-        )
+        records = [r for node in graph.nodes.values() for r in (*node.facts, *node.edges) if r.superseded_at is None]
+        # The time bar moves valid time by default; `a` flips it to knowledge time.
+        self.spans = {axis: time_span(records, axis) for axis in TIME_AXES}
+        self.time_axis = "valid" if self.spans["valid"] or not self.spans["known"] else "known"
+        self.span = self.spans[self.time_axis]
         self.title = f"bibliotheke — {graph.root.name}"
         self.filters = ""
         self.sub_title = ""
@@ -764,16 +1000,25 @@ class GraphView(App):
 
     def _picture(self, i: int) -> Picture:
         """The lens built, once; the scene holds everything that was ever
-        valid (the other two axes still apply), laid out once, so the time
-        slider only hides nodes and fades edges and nothing jumps."""
+        valid or known (changed time still applies), laid out once, so the
+        time slider, on either axis, only hides nodes and fades edges and
+        nothing jumps."""
         if i not in self.pictures:
-            self.pictures[i] = Picture(self.graph, replace(self.at, valid_at=None), self.lenses[i])
+            lens = self.lenses[i]
+            if lens.globe:  # placed as of the time shown; a new time builds it again
+                from bibliotheke.globe import GlobePicture
+
+                self.pictures[i] = GlobePicture(self.graph, self.at, lens)
+            else:
+                self.pictures[i] = Picture(self.graph, replace(self.at, valid_at=None, known_at=None), lens)
         return self.pictures[i]
 
     def _adopt(self, picture: Picture) -> None:
         """Make a picture the one shown."""
         self.picture = picture
         self.look = picture.look
+        if tui.THEMES.get(self.look.chrome, tui.THEME).name != self.theme:
+            tui.style(self, self.look.chrome)  # a lens in another theme brings its chrome
         self.scene = picture.scene
         self.plot = picture.plot
         self.handle = picture.handle
@@ -785,6 +1030,7 @@ class GraphView(App):
         self.edge_valid = [True] * len(self.scene.edges)
         self.hidden_categories: set[str] = set()
         self.pinned = None  # a pin belongs to one picture's node indices
+        _show_labels(picture, self.labels_on)
 
     @property
     def lens(self) -> Lens:
@@ -799,15 +1045,43 @@ class GraphView(App):
         try:
             self.picture.energy = self.energy
             self.lens_index = i
-            self._adopt(self._picture(i))
-            old = self.query_one("#plot", PlotWidget)
-            body = self.query_one("#body")
-            await old.remove()
-            widget = PlotWidget(self.plot, id="plot", pickable=True)
-            await body.mount(widget, before=0)
+            picture = self._picture(i)
+            if getattr(picture, "globe", False) and picture.at != self.at:
+                del self.pictures[i]  # built for another time
+                picture = self._picture(i)
+            await self._show_picture(picture)
+        finally:
+            self.switching = False
+
+    async def _show_picture(self, picture: Picture) -> None:
+        """Put a picture on screen: a new plot widget in place of the old.
+        Focus goes to the new plot unless the time bar holds it (a globe is
+        rebuilt as the bar moves; the bar keeps the keys)."""
+        self._adopt(picture)
+        old = self.query_one("#plot", PlotWidget)
+        body = self.query_one("#body")
+        await old.remove()
+        widget = PlotWidget(self.plot, id="plot", pickable=True)
+        await body.mount(widget, before=0)
+        if self.time_keys:
+            try:
+                self.query_one("#time", TimeSlider).focus()
+            except NoMatches:
+                widget.focus()
+        else:
             widget.focus()
-            self._set_at(self.at)
-            self._show_overview()
+        self._set_at(self.at)
+        self._show_overview()
+
+    async def _rebuild_globe(self) -> None:
+        """The time moved on a globe lens: place everything again as of now."""
+        self._globe_timer = None
+        if not getattr(self.picture, "globe", False) or self.picture.at == self.at or self.switching:
+            return
+        self.switching = True
+        try:
+            self.pictures.pop(self.lens_index, None)
+            await self._show_picture(self._picture(self.lens_index))
         finally:
             self.switching = False
 
@@ -835,17 +1109,21 @@ class GraphView(App):
                     yield Static("", id="sb-body")
             if self.span:
                 first, last = self.span
-                when = timeutil.start(self.at.valid_at) if self.at.valid_at else None
-                yield TimeSlider(first, last, when, id="time")
+                shown = getattr(self.at, f"{self.time_axis}_at")
+                when = timeutil.start(shown) if shown else None
+                yield TimeSlider(first, last, when, id="time", axis=self.time_axis)
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#plot", PlotWidget).focus()
         self._show_overview()
-        if self.handle is not None:
-            self.set_interval(1 / 30, self._tick)
-            if self.span:
-                self.set_interval(1 / PLAY_FPS, self._play_tick)
+        # One layout step per frame: the unfolding reads as motion only
+        # when the frames come fast, and plotui draws them small while the
+        # nodes move, so 60 Hz is affordable. (A globe lens has nothing to
+        # step; the tick stands down for it.)
+        self.set_interval(1 / TICK_FPS, self._tick)
+        if self.span:
+            self.set_interval(1 / PLAY_FPS, self._play_tick)
 
     # -- time ---------------------------------------------------------------
 
@@ -859,6 +1137,14 @@ class GraphView(App):
             if value
         )
         self.sub_title = self._subtitle()
+        if getattr(self.picture, "globe", False):
+            if self.picture.at != at and self.is_running:
+                # Placing is cheap but a new plot is a new widget: wait for
+                # the slider to rest a moment rather than rebuild per step.
+                if getattr(self, "_globe_timer", None) is not None:
+                    self._globe_timer.stop()
+                self._globe_timer = self.set_timer(0.15, self._rebuild_globe)
+            return
         if self.handle is None:
             return
         if at.filtered:
@@ -882,11 +1168,47 @@ class GraphView(App):
         except (NoMatches, ScreenStackError):  # before the app is running
             pass
 
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        """The arrow bindings apply only in time mode; otherwise the key goes
+        on to the focused widget (the plot turns)."""
+        if action == "arrow_time":
+            return self.time_keys
+        return True
+
+    def action_arrow_time(self, steps: int) -> None:
+        self.action_step_time(steps)
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        """A click on the time bar hands it the arrows; one anywhere else
+        (the plot, the legend, the sidebar) gives them back."""
+        widget = event.widget if hasattr(event, "widget") else None
+        on_bar = widget is not None and (isinstance(widget, TimeSlider) or any(isinstance(a, TimeSlider) for a in widget.ancestors))
+        self.time_keys = on_bar
+
     @on(TimeSlider.Changed)
     def _time_changed(self, message: TimeSlider.Changed) -> None:
         if message.by_user:
             self.playing = False
-        self._set_at(replace(self.at, valid_at=timeutil.canonical(message.when)))
+        self._set_at(replace(self.at, **{f"{self.time_axis}_at": timeutil.canonical(message.when)}))
+        self._show_overview()
+
+    def action_time_axis(self) -> None:
+        """Flip the time bar between valid time and knowledge time. The axis
+        left behind stops filtering; the new one starts at its end (now)."""
+        other = "known" if self.time_axis == "valid" else "valid"
+        if not self.spans[other]:
+            self.notify(f"Nothing in this graph has a {other} time.", timeout=3)
+            return
+        try:
+            slider = self.query_one("#time", TimeSlider)
+        except NoMatches:
+            return
+        self.playing = False
+        old, self.time_axis = self.time_axis, other
+        self.span = self.spans[other]
+        first, last = self.span
+        slider.retarget(first, last, other)
+        self._set_at(replace(self.at, **{f"{old}_at": None, f"{other}_at": timeutil.canonical(last)}))
         self._show_overview()
 
     def action_step_time(self, steps: int) -> None:
@@ -940,13 +1262,16 @@ class GraphView(App):
         self.query_one("#sb-body", Static).update(body)
 
     def _show_overview(self) -> None:
-        nodes = sum(self.node_visible)
-        edges = sum(1 for (a, b), valid in zip(self.scene.edges, self.edge_valid) if valid and self.node_visible[a] and self.node_visible[b])
-        lines = [f"{nodes} nodes, {edges} edges"]
+        if getattr(self.picture, "globe", False):
+            lines = self.picture.overview()
+        else:
+            nodes = sum(self.node_visible)
+            edges = sum(1 for (a, b), valid in zip(self.scene.edges, self.edge_valid) if valid and self.node_visible[a] and self.node_visible[b])
+            lines = [f"{nodes} nodes, {edges} edges"]
         if self.filters:
             lines.append(escape(self.filters))
         if len(self.lenses) > 1:
-            lines += ["", "[bold]Lenses[/bold]  j / k or tab / shift+tab to cycle, a number to jump"]
+            lines += ["", "[bold]Lenses[/bold]  j / k or tab / shift+tab to cycle"]
             for i, lens in enumerate(self.lenses, 1):
                 mark = "●" if i - 1 == self.lens_index else "○"
                 lines.append(f"{mark} {i} [bold]{escape(lens.name)}[/bold]  [dim]{escape(lens.description)}[/dim]")
@@ -955,11 +1280,15 @@ class GraphView(App):
             "",
             "[bold]Keys[/bold]",
             "drag: rotate   shift+drag: pan   scroll: zoom",
+            "1–9: show or hide a legend row (or click it)",
             "f: focus mode (hover dims the rest; click pins)",
+            "t: show or hide node names",
             "r: reset view   i: details   esc: clear   q: quit",
         ]
         if self.span:
-            lines += ["", "Drag the time bar, or , and . to step,", "< and > to jump, space to play."]
+            lines += ["", "Drag the time bar, or , and . to step,", "< and > to jump, space to play;",
+                      "after a click on the bar, ←/→ step it (shift: jump)", "until you click the plot;",
+                      f"a to move {'known' if self.time_axis == 'valid' else 'valid'} time instead of {self.time_axis}."]
         self._set_sidebar(self.graph.root.name, "\n".join(lines))
 
     def _show_node(self, i: int) -> None:
@@ -996,9 +1325,24 @@ class GraphView(App):
     @on(PlotWidget.ElementHovered)
     def _hovered(self, message: PlotWidget.ElementHovered) -> None:
         widget = self._widget()
-        if self.handle is None or widget is None:
+        if widget is None:
             return
         element = message.element
+        if getattr(self.picture, "globe", False):
+            # The place under the pointer lights its arcs; off every place,
+            # the clicked one (if any) keeps them lit.
+            if element is not None and element[0] == "node" and element[1] < len(self.picture.places):
+                place = self.picture.places[element[1]]
+                self.sub_title = f"{place.node.name} · {len(place.members)}"
+                lit = element[1]
+            else:
+                self.sub_title = self._subtitle()
+                lit = self.pinned
+            if self.picture.light(lit):
+                widget.invalidate()
+            return
+        if self.handle is None:
+            return
         if element is not None and element[0] == "node":
             self.sub_title = self.scene.nodes[element[1]].name
             if self.focus:
@@ -1017,7 +1361,7 @@ class GraphView(App):
         """Focus mode: node ``i`` and its neighbourhood in full colour, the
         rest dimmed; ``None`` lights everything again."""
         widget = self._widget()
-        if widget is None:
+        if widget is None or self.handle is None:
             return
         if i is None:
             widget.set_graph_colors(self.handle, list(self.base), self._resting_edges())
@@ -1029,6 +1373,12 @@ class GraphView(App):
             for pair, valid in zip(self.scene.edges, self.edge_valid)
         ]
         widget.set_graph_colors(self.handle, node_colors, edge_colors)
+
+    def action_toggle_labels(self) -> None:
+        """Show or hide the node names drawn on the graph (off by default)."""
+        self.labels_on = not self.labels_on
+        if _show_labels(self.picture, self.labels_on):
+            self.query_one("#plot", PlotWidget).invalidate()
 
     def action_focus(self) -> None:
         """Toggle focus mode. Off (the default), hovering only names a node;
@@ -1056,9 +1406,9 @@ class GraphView(App):
     @on(PlotWidget.LegendToggled)
     def _legend_toggled(self, message: PlotWidget.LegendToggled) -> None:
         """A legend click hides or shows every node of that category."""
-        if self.handle is None or message.entry is None:
+        if self.handle is None or message.entry is None or message.entry >= len(self.picture.legend_rows):
             return
-        category = list(self.scene.legend)[message.entry]
+        category = self.picture.legend_rows[message.entry]
         if message.visible:
             self.hidden_categories.discard(category)
         else:
@@ -1070,11 +1420,22 @@ class GraphView(App):
         """A click on a node or edge opens the details panel on it; the
         graph has the whole screen until then."""
         element = message.element
+        globe = getattr(self.picture, "globe", False)
         if element is None:
             self._show_overview()
-            if self.focus:
+            if globe:
+                self.pinned = None
+                self._light_globe(None)
+            elif self.focus:
                 self.pinned = None
                 self._light(None)
+        elif globe:
+            if element[0] == "node" and element[1] < len(self.picture.places):
+                place = self.picture.places[element[1]]
+                self._set_sidebar(place.node.name, "\n".join(self.picture.place_lines(element[1], self.at)))
+                self._show_sidebar(True)
+                self.pinned = element[1]
+                self._light_globe(self.pinned)
         elif element[0] == "node":
             self._show_node(element[1])
             self._show_sidebar(True)
@@ -1095,17 +1456,26 @@ class GraphView(App):
     def action_toggle_sidebar(self) -> None:
         self._show_sidebar(not self.query_one("#sidebar").display)
 
+    def _light_globe(self, i: int | None) -> None:
+        """Light the arcs of place `i` on a globe lens (`None`: all at rest)."""
+        if self.picture.light(i) and (widget := self._widget()):
+            widget.invalidate()
+
     def action_deselect(self) -> None:
         """Back to the clean view: nothing selected or pinned, details panel away."""
         self.plot.set_selected(None)
         self.pinned = None
-        if self.focus:
+        if getattr(self.picture, "globe", False):
+            self._light_globe(None)
+        elif self.focus:
             self._light(None)
         self._show_overview()
         self._show_sidebar(False)
 
     def action_reset_view(self) -> None:
         self.plot.reset()
+        if getattr(self.picture, "globe", False):
+            self.picture.look_home()
         if widget := self._widget():
             widget.invalidate()
 

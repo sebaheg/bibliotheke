@@ -81,6 +81,12 @@ class NodeSpec:
     # ``valid_from`` is *when*, it has no ``valid_to``, and it is shown as a
     # date, not a span. Both read the same under ``--valid-at``.
     time: str = "interval"
+    # When a node of this type comes into the world, for types whose own
+    # records do not say (a person, a company): the earliest of these, each
+    # a time fact (``founded``) or ``<rel``, the start of the nodes that
+    # point at it by ``rel`` (``<authored_by``: a person's first paper).
+    # Before then, a valid-time view does not show the node.
+    starts: tuple[str, ...] = ()
 
     @property
     def event(self) -> bool:
@@ -293,6 +299,7 @@ class DataModel:
                     "id": spec.id,
                     "body": spec.body,
                     "time": spec.time,
+                    **({"starts": list(spec.starts)} if spec.starts else {}),
                     "facts": {key: fact(f) for key, f in (spec.facts or {}).items()},
                 }
                 for type, spec in self.nodes.items()
@@ -359,6 +366,13 @@ def _node_spec(type: str, raw: Any, vocabularies: dict[str, tuple[str, ...]]) ->
     time = str(raw.get("time") or "interval")
     if time not in NODE_TIMES:
         raise ModelError(f"bibliotheke.yaml: nodes.{type}.time must be one of {', '.join(NODE_TIMES)}, not {time!r}")
+    starts = raw.get("starts")
+    starts = tuple(str(s) for s in ([starts] if isinstance(starts, str) else _list(starts, f"nodes.{type}.starts")))
+    for item in starts:
+        if not item.startswith("<") and (item not in facts or facts[item].type not in ("time", "int")):
+            raise ModelError(
+                f"bibliotheke.yaml: nodes.{type}.starts: {item!r} is not a time or int fact of {type}, nor <relation"
+            )
     return NodeSpec(
         type=type,
         description=str(raw.get("description") or "").strip(),
@@ -367,6 +381,7 @@ def _node_spec(type: str, raw: Any, vocabularies: dict[str, tuple[str, ...]]) ->
         body=str(raw.get("body") or "").strip(),
         facts=facts,
         time=time,
+        starts=starts,
     )
 
 

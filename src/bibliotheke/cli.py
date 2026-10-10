@@ -13,9 +13,13 @@ from pathlib import Path
 from typing import Annotated, Any, Callable, Optional
 
 import typer
+import typer.rich_utils
 import yaml
 from rich.console import Console
-from rich.table import Table
+from rich.markup import escape
+from rich.text import Text
+
+from bibliotheke.terminal import Table  # one row per line, long cells end in an ellipsis
 
 from bibliotheke import analysis
 from bibliotheke import palette
@@ -29,11 +33,40 @@ from bibliotheke.datamodel import DataModel, ModelError
 from bibliotheke.graph import At, Graph, GraphError
 from bibliotheke.model import Node, Record
 
+def _one_line_help(help_text: str, markup_mode: Any = None) -> Text:
+    """A command's row in `bib --help`: its first sentence on one line, cut
+    with … when the terminal is narrower. `bib <command> --help` still
+    shows the whole docstring."""
+    paragraph = " ".join(help_text.strip().split("\n\n")[0].split())
+    sentence = re.split(r"\.\s+(?=[A-Z`])", paragraph)[0].rstrip(".")  # not at "e.g. a"
+    return Text(sentence, no_wrap=True, overflow="ellipsis")
+
+
+typer.rich_utils._make_command_help = _one_line_help  # the command list only; per-command help is untouched
+
 app = typer.Typer(
-    help="A files-only knowledge graph with three time axes: valid, knowledge and change time.",
+    help="A git-versioned, files-only knowledge graph with three time axes: valid, knowledge and change time.",
     no_args_is_help=True,
     add_completion=False,
 )
+
+
+def _print_version(value: bool) -> None:
+    if value:
+        from importlib.metadata import version
+
+        typer.echo(f"bib {version('bibliotheke')}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: Annotated[
+        bool,
+        typer.Option("--version", "-V", callback=_print_version, is_eager=True, help="Print the version and exit."),
+    ] = False,
+) -> None:
+    """A git-versioned, files-only knowledge graph with three time axes: valid, knowledge and change time."""
 add_app = typer.Typer(help="Add a node, a fact or an edge.", no_args_is_help=True)
 app.add_typer(add_app, name="add")
 model_app = typer.Typer(
@@ -189,10 +222,13 @@ def _print_node(graph: Graph, node: Node, at: At | None) -> None:
         out.print(table)
 
 
-def _print_nodes(graph: Graph, nodes: list[Node], at: At, as_json: bool, sort: str = "type") -> None:
+def _print_nodes(graph: Graph, nodes: list[Node], at: At, as_json: bool, sort: str | None = None) -> None:
     """Nodes with when they are in the world (see ``Graph.span``), sorted by
     ``type`` (then id), ``name``, ``id`` or ``valid`` (earliest first,
-    undated last)."""
+    undated last). Without ``--sort``, the order is bibliotheke.yaml's
+    ``list: sort:``, else ``type``."""
+    configured = _settings(graph, "list").get("sort")
+    sort = sort or configured or "type"
     spans = {node.id: graph.span(node.id, at) for node in nodes}
     if as_json:
         _echo_json(
@@ -206,7 +242,8 @@ def _print_nodes(graph: Graph, nodes: list[Node], at: At, as_json: bool, sort: s
         "valid": lambda n: (spans[n.id][0] is None, timeutil.start(spans[n.id][0]) if spans[n.id][0] else None, n.id),
     }
     if sort not in keys:
-        raise GraphError(f"--sort must be one of {', '.join(keys)}")
+        where = "--sort" if sort != configured else "list: sort: in bibliotheke.yaml"
+        raise GraphError(f"{where} must be one of {', '.join(keys)}, not {sort!r}")
     table = Table(box=None, pad_edge=False)
     for column in ("id", "type", "name", "valid"):
         table.add_column(column)
@@ -230,7 +267,10 @@ def _when(graph: Graph, type: str, start: str | None, end: str | None) -> str:
     return f"{start or '…'} → {end or '…'}"
 
 
-Sort = Annotated[str, typer.Option("--sort", help="Order: type (default), name, id or valid (earliest first).")]
+Sort = Annotated[
+    Optional[str],
+    typer.Option("--sort", help="Order: type, name, id or valid (earliest first). Default: list: sort: in bibliotheke.yaml, else type."),
+]
 
 
 @app.command()
@@ -348,7 +388,7 @@ def history(
 @app.command("list")
 def list_nodes(
     type: Annotated[Optional[str], typer.Option("--type", help="Only nodes of this type.")] = None,
-    sort: Sort = "type",
+    sort: Sort = None,
     valid_at: ValidAt = None,
     known_at: KnownAt = None,
     changed_at: ChangedAt = None,
@@ -365,7 +405,8 @@ def list_nodes(
 @app.command()
 def search(
     text: str,
-    sort: Sort = "type",
+    type: Annotated[Optional[str], typer.Option("--type", help="Only nodes of this type.")] = None,
+    sort: Sort = None,
     valid_at: ValidAt = None,
     known_at: KnownAt = None,
     changed_at: ChangedAt = None,
@@ -373,9 +414,10 @@ def search(
     at_commit: AtCommit = None,
     root: Root = None,
 ) -> None:
-    """Find nodes whose name, notes, facts or edges contain the text."""
+    """Find nodes whose name, notes, facts, edges or body contain the text,
+    ignoring case and accents."""
     graph, at = _open(root, at_commit), _at(valid_at, known_at, changed_at)
-    _print_nodes(graph, graph.search(text, at), at, as_json, sort)
+    _print_nodes(graph, graph.search(text, at, type=type), at, as_json, sort)
 
 
 @app.command()
@@ -965,17 +1007,22 @@ def model_diff(
     rev2: Annotated[Optional[str], typer.Argument(help="Git revision to compare to. Default: the working tree.")] = None,
     as_json: AsJson = False,
     markdown: Annotated[bool, typer.Option("--markdown", help="Report as Markdown, for a pull request.")] = False,
+    no_destructive: Annotated[
+        bool, typer.Option("--no-destructive", help="Exit 1 on a destructive change too, as the pre-commit hook does.")
+    ] = False,
     root: Root = None,
 ) -> None:
     """How the model changed between two git revisions, and what the change breaks.
 
     Each change is marked additive (+), destructive (-) or neutral (~), then
-    the data is checked against the newer model. Exits 1 when something breaks.
+    the data is checked against the newer model. Exits 1 when something breaks,
+    or with --no-destructive on any destructive change.
     """
     old = _open(root, rev1)
     new = _open(root, rev2)
     changes = modeledit.diff_models(old.model, new.model)
     problems = new.model.problems(new.nodes, new.root) if new.model else []
+    destructive = any(c.kind == modeledit.DESTRUCTIVE for c in changes)
     if as_json:
         _echo_json(
             {
@@ -990,6 +1037,9 @@ def model_diff(
     else:
         _print_changes(f"Model changes, {rev1} → {rev2 or 'working tree'}", changes)
         _print_problems(problems)
+    if no_destructive and destructive:
+        err.print("[bad]destructive model change[/bad]; set BIB_ALLOW_DESTRUCTIVE=1 to commit it anyway")
+        raise typer.Exit(1)
     if problems:
         raise typer.Exit(1)
 
@@ -1016,8 +1066,30 @@ def model_log(
     for column in ("date", "commit", "subject", "model change"):
         table.add_column(column)
     for entry in entries:
-        table.add_row(entry.date, entry.sha[:7], entry.subject, gitops.summary(entry.changes))
+        table.add_row(entry.date, entry.sha[:7], entry.subject, _coloured_summary(entry.changes))
     out.print(table)
+    out.print("[ok]+ additive[/ok]  [bad]- destructive[/bad]  [dim]~ neutral[/dim]")
+
+
+def _coloured_summary(changes: list[modeledit.Change]) -> str:
+    """One line: for each kind of change present, its count and what it
+    touched, in the kind's colour: green gains, red losses, dim rewording."""
+    styles = {modeledit.ADDITIVE: "ok", modeledit.DESTRUCTIVE: "bad", modeledit.NEUTRAL: "dim"}
+    marks = {modeledit.ADDITIVE: "+", modeledit.DESTRUCTIVE: "-", modeledit.NEUTRAL: "~"}
+    parts = []
+    for kind in (modeledit.DESTRUCTIVE, modeledit.ADDITIVE, modeledit.NEUTRAL):
+        where: list[str] = []
+        for change in changes:
+            # The model itself coming or going reads better said than as a name.
+            label = {("model", modeledit.DESTRUCTIVE): "model added", ("model", modeledit.ADDITIVE): "model removed"}.get(
+                (change.where, change.kind), change.where
+            )
+            if change.kind == kind and label not in where:
+                where.append(label)
+        if where:
+            shown = ", ".join(where[:4]) + (f" +{len(where) - 4}" if len(where) > 4 else "")
+            parts.append(f"[{styles[kind]}]{marks[kind]}{len(where)} {shown}[/{styles[kind]}]")
+    return "   ".join(parts)
 
 
 @model_app.command("version")
@@ -1204,42 +1276,29 @@ def model_split(root: Root = None) -> None:
 
 @app.command()
 def check(
-    since: Annotated[
-        Optional[str], typer.Option("--since", help="Also show how the model changed since this git revision.")
-    ] = None,
     markdown: Annotated[bool, typer.Option("--markdown", help="Report as Markdown, for a pull request.")] = False,
-    no_destructive: Annotated[
-        bool, typer.Option("--no-destructive", help="With --since: fail on a destructive model change too.")
-    ] = False,
     as_json: AsJson = False,
     root: Root = None,
 ) -> None:
     """Validate the graph files: dangling edges, misplaced files, duplicate records,
     orphaned bodies, `file` facts that name missing files, and anything the data
     model does not allow. Shows, per node type, how many nodes are consistent
-    with the model. Exits 1 on a problem."""
+    with the model. Exits 1 on a problem. (How the model changed is
+    `bib model diff`'s question.)"""
     graph = _open(root)
     problems = graph.check()
-    changes = modeledit.diff_models(_open(root, since).model, graph.model) if since else None
-    destructive = any(c.kind == modeledit.DESTRUCTIVE for c in changes or [])
     rows = _check_breakdown(graph, problems)
     if markdown:
-        typer.echo(modeledit.markdown_report(f"Model changes since {since}", changes, problems, len(graph.nodes)), nl=False)
+        typer.echo(modeledit.markdown_report("", None, problems, len(graph.nodes)), nl=False)
     elif as_json:
         _echo_json({
             "ok": not problems,
             "nodes": len(graph.nodes),
             "types": [{"type": t, "nodes": n, "ok": n - bad, "facts": f, "edges": e, "problems": bad} for t, n, f, e, bad in rows],
             "problems": problems,
-            "changes": [{"where": c.where, "what": c.what, "kind": c.kind} for c in changes] if changes is not None else None,
         })
     else:
-        if changes is not None:
-            _print_changes(f"Model changes since {since}", changes)
         _print_check(graph, rows, problems)
-    if no_destructive and destructive:
-        err.print("[bad]destructive model change[/bad]; set BIB_ALLOW_DESTRUCTIVE=1 to commit it anyway")
-        raise typer.Exit(1)
     if problems:
         raise typer.Exit(1)
 
@@ -1342,69 +1401,141 @@ def ci(
 
 @app.command()
 def view(
+    name: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Start on this lens, by name or the start of it: `bib view globe`, `bib view people`. `bib view list` prints the lenses.",
+            show_default=False,
+        ),
+    ] = None,
     color_by: Annotated[
         Optional[str], typer.Option("--color-by", help="Colour nodes by 'type', a fact key, or an edge (a node takes its target's colour).")
     ] = None,
-    theme: Annotated[Optional[str], typer.Option("--theme", help="'map' (default) or 'classic'.")] = None,
+    theme: Annotated[Optional[str], typer.Option("--theme", help="plotui (default), dracula, map or classic.")] = None,
     rels: Rels = None,
     tree: Annotated[
         Optional[str],
         typer.Option("--tree", help="A hierarchy relation (e.g. contains): lay the graph out as a still tree instead of a force simulation."),
     ] = None,
+    hide: Annotated[
+        Optional[list[str]], typer.Option("--hide", help="Leave out nodes of this type (repeatable), e.g. --hide claim.")
+    ] = None,
+    lens: Annotated[
+        Optional[str], typer.Option("--lens", help="The same as the LENS argument.", hidden=True)
+    ] = None,
+    list_lenses: Annotated[
+        bool, typer.Option("--list", help="Print the graph's lenses and exit, without opening the view.")
+    ] = False,
+    details: Annotated[
+        bool, typer.Option("--details", help="With list: what each lens draws, hides and colours by.")
+    ] = False,
     valid_at: ValidAt = None,
     known_at: KnownAt = None,
     changed_at: ChangedAt = None,
     root: Root = None,
 ) -> None:
-    """Open the interactive graph view (needs a Kitty-graphics terminal).
+    """Open the interactive graph view, on a lens by name (needs a Kitty-graphics terminal).
 
-    Defaults come from an optional `view:` section in bibliotheke.yaml:
-    `theme`, `color_by`, `colors` (category -> "#rrggbb") and `labels`
-    (how many of the best-connected nodes to name).
+    A graph says how it wants to be looked at in the `view:` section of
+    bibliotheke.yaml: `theme`, `color_by`, `colors`, `labels`, `size_by`,
+    `rels`, `hide`/`show`, `legend`, `tree` and, under `lenses:`, any
+    number of named lenses with the same keys, each one way of drawing the
+    graph; j/k and tab switch between them. A lens with `layout: globe`
+    puts the graph on the Earth (`place`, `via`, `arcs`), and a graph with
+    `lat`/`lon` facts that declares none gets a Globe lens anyway, so
+    `bib view globe` works on it. `--rel`, `--tree` and `--hide` make a
+    lens of your own instead.
     """
-    from bibliotheke.view import GraphView, theme_for
+    from bibliotheke import lenses as declared
 
     graph = _open(root)
-    settings = _settings(graph, "view")
     try:
-        chosen = theme_for(theme or settings.get("theme") or "map", settings.get("colors"), settings.get("labels"))
+        specs = declared.declared(graph)
+        # `bib view list` is `--list`, unless the graph has a lens of that name.
+        if list_lenses or (name == "list" and not any(s.name.lower().startswith("list") for s in specs)):
+            _print_lenses(specs, details)
+            return
+        chosen = declared.lenses(graph, theme=theme, color_by=color_by, rels=rels, tree=tree, hide=hide, lens=name or lens)
+        default = valid_at or (None if known_at or changed_at else declared.valid_at(graph))
     except ValueError as error:
         raise GraphError(str(error)) from error
-    at = _at(valid_at, known_at, changed_at)
-    GraphView(graph, at, color_by or settings.get("color_by") or "type", chosen, rels, tree=tree or settings.get("tree")).run()
+    from bibliotheke.view import GraphView
+
+    GraphView(graph, _at(default, known_at, changed_at), lenses=chosen).run()
 
 
-@app.command()
+def _lens_command(spec) -> str:
+    """What to type to open a lens: its name, lower case, quoted if it has a space."""
+    name = spec.name.lower()
+    return f"bib view {name}" if name.replace("-", "").replace("_", "").isalnum() else f"bib view '{name}'"
+
+
+def _print_lenses(specs: list, details: bool = False) -> None:
+    """One line per lens: the command that opens it and what it shows.
+    ``details`` adds what each draws, hides and colours by."""
+    if details:
+        _print_lens_details(specs)
+        return
+    plural = "es" if len(specs) != 1 else ""
+    first = f"; `bib view` opens {escape(specs[0].name)}" if specs else ""
+    out.print(f"[bold]{len(specs)} lens{plural}[/bold][dim]{first}; `bib view list --details` for more[/dim]")
+    table = Table(box=None, pad_edge=False, show_header=False, padding=(0, 2, 0, 0))
+    commands = [_lens_command(spec) for spec in specs]
+    # The commands are what you type: never cut. Descriptions give way.
+    table.add_column(style="bold cyan", no_wrap=True, min_width=max(map(len, commands), default=0))
+    table.add_column(style="dim", no_wrap=True, overflow="ellipsis")
+    for command, spec in zip(commands, specs):
+        table.add_row(escape(command), escape(spec.description))
+    out.print(table)
+
+
+def _print_lens_details(specs: list) -> None:
+    """One block per lens: the lists are long, so a table would not fit."""
+    plural = "es" if len(specs) != 1 else ""
+    out.print(f"[bold]{len(specs)} lens{plural}[/bold]")
+    for spec in specs:
+        labels = str(spec.labels) if spec.labels is not None else "theme default"
+        if spec.label_types:
+            labels += f" ({', '.join(spec.label_types)})"
+        if spec.globe:
+            arcs = spec.arcs if isinstance(spec.arcs, str) else ", ".join(spec.arcs)
+            look = [
+                "globe",
+                f"places {', '.join(spec.place) if spec.place else 'inferred'}",
+                f"via {', '.join(spec.via) if spec.via else 'inferred'}",
+                f"arcs {arcs}",
+                f"colour by {spec.color_by}",
+            ]
+        else:
+            look = [
+                f"tree ({spec.tree})" if spec.tree else "force",
+                f"colour by {spec.color_by}",
+                f"size by {spec.size_by or 'degree'}",
+                f"labels {labels}",
+            ]
+        if spec.min_parallel > 1:
+            look.append(f"pairs joined {spec.min_parallel}+ times")
+        if spec.hide_unlinked:
+            look.append("unlinked nodes left out")
+        if spec.legend is not None:
+            look.append("no legend" if not spec.legend else f"legend {', '.join(spec.legend)}")
+        out.print(f"\n[bold cyan]{escape(_lens_command(spec))}[/bold cyan]  [dim]{escape(spec.description)}[/dim]")
+        if not spec.globe:
+            out.print(f"   draws   {escape(', '.join(spec.rels)) if spec.rels else 'every relation'}")
+        out.print(f"   hides   {escape(', '.join(spec.hide)) if spec.hide else 'nothing'}")
+        out.print(f"   [dim]{escape(' · '.join(look))}[/dim]")
+
+
+@app.command(hidden=True)
 def globe(
-    who: Annotated[
-        Optional[str], typer.Option("--who", help="Comma-separated node types to place. Default: person.")
-    ] = None,
-    theme: Annotated[
-        Optional[str], typer.Option("--theme", help="Globe look: dark (default), earth, light, blueprint or wire.")
-    ] = None,
     valid_at: ValidAt = None,
     known_at: KnownAt = None,
     changed_at: ChangedAt = None,
     root: Root = None,
 ) -> None:
-    """Show where things are on a globe (needs a Kitty-graphics terminal).
-
-    A place is any node with `lat` and `lon` facts. Other nodes are placed by
-    following `based_in`, then `located_in`, then `affiliated_with` edges, so
-    a person is at their organisation's city unless they have a `based_in`
-    of their own. Arcs join places linked through a shared node such as a
-    paper. Defaults come from an optional `globe:` section in
-    bibliotheke.yaml: `who`, `via` and `theme`.
-    """
-    from bibliotheke.globe import GlobeView
-    from bibliotheke.geo import VIA, WHO
-
-    graph = _open(root)
-    settings = _settings(graph, "globe")
-    kinds = tuple(t.strip() for t in (who or ",".join(settings.get("who") or WHO)).split(",") if t.strip())
-    via = tuple(settings.get("via") or VIA)
-    at = _at(valid_at, known_at, changed_at)
-    GlobeView(graph, at, kinds, via, theme or settings.get("theme") or "dark").run()
+    """The same as `bib view globe`."""
+    view(name="globe", color_by=None, theme=None, rels=None, tree=None, hide=None, lens=None, list_lenses=False, details=False,
+         valid_at=valid_at, known_at=known_at, changed_at=changed_at, root=root)
 
 
 def main() -> None:

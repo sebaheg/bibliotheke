@@ -1,36 +1,48 @@
-"""The globe view: located nodes on a plotui globe in a Textual app.
+"""A globe lens: located nodes on a plotui globe, one picture in the graph view.
 
-Each place is a point sized by how many located nodes it holds, labelled with
-its name and that count. Arcs join places linked through a placeless node
-(see `bibliotheke.geo`), brighter and wider the more nodes link them.
+Each place is a point sized by how many located nodes it holds, coloured by
+what most of them are (the lens's ``color_by``), labelled with its name and
+that count. Arcs join linked places (see `bibliotheke.geo`): quiet at rest,
+a little stronger the more links they carry, rising with their length; the
+place under the pointer, or the one clicked, lights its own. A lens declares ``layout: globe``; a graph
+with coordinates and no globe lens gets one (`bibliotheke.lenses`).
 """
 
 from __future__ import annotations
 
 import math
 
-from plotui import Plot
-from plotui.textual import PlotWidget
-from rich.markup import escape
-from textual import on
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Footer, Header, Static
+from collections import Counter
+from typing import TYPE_CHECKING
 
-from bibliotheke.geo import VIA, WHO, GeoScene, Place, build_geo
+from plotui import Plot
+from rich.markup import escape
+
+from bibliotheke.geo import VIA, GeoScene, Place, build_geo, infer
 from bibliotheke.graph import At, Graph
 
-CANVAS = (17, 18, 21)
-POINT = (255, 209, 102)
-# (fewest linking nodes, legend label, colour, width, height): one arc trace per
-# tier, so a legend click can switch the faint ones off
+if TYPE_CHECKING:
+    from bibliotheke.view import Lens
+
+# (fewest linking nodes, legend label, opacity, width): one arc trace per
+# tier, so a legend click can switch the faint ones off. Arcs are one quiet
+# colour; the places carry the picture, and a hovered or clicked place
+# lights its own arcs (`GlobePicture.light`).
 TIERS = [
-    (1, "linked once", (52, 120, 160), 1.0, 0.05),
-    (2, "linked 2-3 times", (79, 195, 247), 1.6, 0.08),
-    (4, "linked 4+ times", (190, 236, 255), 2.4, 0.11),
+    (1, "linked once", 60, 1.0),
+    (2, "linked 2-3 times", 105, 1.3),
+    (4, "linked 4+ times", 150, 1.6),
 ]
+ARC = (120, 200, 230)  # an arc at rest
+LIT = (225, 245, 255)  # an arc of the place under the pointer
+DIM = 16  # the opacity of every other arc meanwhile
+# An arc rises in proportion to its length (globe radii per radian of arc),
+# up to a cap: a hop between neighbouring cities hugs the surface and only
+# the intercontinental ones lift off it.
+RISE = 0.1
+MAX_RISE = 0.2
 NEAR_KM = 150  # places closer than this share one label
-HINT = "Drag to turn the globe, scroll to zoom.\nClick a place to see who is there."
+HINT = "Drag to turn the globe, scroll to zoom.\nHover a place to light its links; click it to see what is there."
 
 
 def distance_km(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -57,166 +69,187 @@ def label_groups(places: list[Place]) -> list[list[int]]:
     return groups
 
 
+def arc_height(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """How high the arc from `a` to `b` rises at its middle, in globe radii."""
+    return min(MAX_RISE, RISE * distance_km(a, b) / 6371)
+
+
 def arc_tier(count: int) -> int:
     return max(i for i, (least, *_) in enumerate(TIERS) if count >= least)
 
 
-class GlobeView(App):
-    CSS = """
-    HeaderIcon { display: none; }  /* the command-palette button; ^p still opens it */
-    #body { height: 1fr; }
-    #plot { width: 1fr; height: 1fr; }
-    #sidebar { width: 44; height: 1fr; background: $panel; border-left: thick $accent; padding: 0 1; }
-    #sb-title { color: $accent; text-style: bold; padding: 1 0; }
-    """
-    BINDINGS = [("q", "quit", "Quit"), ("r", "reset_view", "Reset view"), ("escape", "deselect", "Deselect")]
+class GlobePicture:
+    """A globe lens applied to a graph at one time: the places, their plot,
+    and a :class:`~bibliotheke.view.Scene` whose nodes are the places in the
+    order the plot numbers its points, so the graph view's hover, click and
+    sidebar work on it as on any picture. Nothing is laid out; a new time
+    builds a new picture."""
 
-    def __init__(
-        self,
-        graph: Graph,
-        at: At,
-        who: tuple[str, ...] = WHO,
-        via: tuple[str, ...] = VIA,
-        theme: str = "dark",
-    ) -> None:
-        super().__init__()
+    globe = True
+
+    def __init__(self, graph: Graph, at: At, lens: Lens) -> None:
+        from bibliotheke.view import THEMES, Scene, _category, category_colors, node_size
+
+        theme = lens.theme
+        self.lens = lens
+        self.look = theme
         self.graph = graph
         self.at = at
-        self.who = who
-        self.scene: GeoScene = build_geo(graph, at, who, via)
-        self.title = f"bibliotheke — {graph.root.name}"
-        self.filters = "  ".join(
-            f"{label} {value}"
-            for label, value in (("valid", at.valid_at), ("known", at.known_at), ("changed", at.changed_at))
-            if value
+        self.labels = None  # place names are drawn by the plot itself
+        self.labels_shown = False
+        inferred_who, inferred_via = infer(graph)
+        self.who = tuple(lens.place or inferred_who)
+        self.via = tuple(lens.via or inferred_via or VIA)
+        arcs = lens.arcs if isinstance(lens.arcs, str) else tuple(lens.arcs)
+        geo: GeoScene = build_geo(graph, at, self.who, self.via, arcs, tuple(lens.hide or ()))
+        self.geo = geo
+        group = lens.group or (lambda category: category)
+        # A place is coloured by what most of what it holds is.
+        raw = []
+        for place in geo.places:
+            counts = Counter(group(_category(graph, graph.nodes[m], at, lens.color_by)) for m in place.members)
+            raw.append(min(counts, key=lambda c: (-counts[c], c)) if counts else group(place.node.type))
+        pool = [n for n in graph.nodes.values() if n.type in self.who]
+        colors = category_colors(graph, pool, lens.color_by, theme, group)
+        for category in raw:
+            colors.setdefault(category, theme.palette[len(colors) % len(theme.palette)])
+        rows = sorted(set(raw))
+        # Points in legend order: the plot numbers them trace by trace.
+        self.order = [i for row in rows for i, c in enumerate(raw) if c == row]
+        at_order = {geo_i: k for k, geo_i in enumerate(self.order)}
+        self.places: list[Place] = [geo.places[i] for i in self.order]
+        self.links = {
+            tuple(sorted((at_order[a], at_order[b]))): nodes for (a, b), nodes in geo.links.items()
+        }
+        categories = [raw[i] for i in self.order]
+        self.scene = Scene(
+            [p.node for p in self.places],
+            [],
+            [],
+            categories,
+            {row: colors[row] for row in rows},
+            [float(len(p.members)) for p in self.places],
+            [p.node.name for p in self.places],
         )
-        self.sub_title = self.filters
+        self.legend_rows = [row for row in rows if lens.legend is None or row in lens.legend]
+        self.handle = None  # not a graph trace: the view's graph-only calls stand down
+        self.layout = None
+        self.still: list = []
+        self.energy = 0.0
+        self.base: list = []
+        self.arcs: list[tuple[int, int, list[tuple[int, int]]]] = []  # (trace, opacity, place pairs)
+        self.lit: int | None = None
         self.plot = Plot()
-        self.plot.set_chrome(canvas=CANVAS, bg=(31, 32, 36), frame=(57, 58, 62))
-        self.plot.add_globe(theme=theme)
-        self.plot.set_legend_corner("top-left")
-        places = self.scene.places
-        if not places:
-            return
-        lats = [p.lat for p in places]
-        lons = [p.lon for p in places]
-        self.plot.add_geo_points(
-            lats,
-            lons,
-            color=POINT,
-            sizes=[2.2 + 1.3 * math.sqrt(len(p.members)) for p in places],
-            name=f"{' / '.join(who)} by place",
+        canvas = theme.canvas or THEMES["plotui"].canvas
+        lift = tuple(min(255, c + 14) for c in canvas)
+        self.plot.set_chrome(
+            canvas=canvas,
+            bg=theme.legend_bg or lift,
+            frame=theme.frame or tuple(min(255, c + 40) for c in canvas),
+            grid=theme.grid,
+            ink=theme.ink,
+            ink_bright=theme.ink_bright,
         )
-        for tier, (_, label, color, width, height) in enumerate(TIERS):
-            pairs = [pair for pair, via_nodes in self.scene.links.items() if arc_tier(len(via_nodes)) == tier]
+        self.plot.add_globe(theme=theme.globe)
+        self.plot.set_legend_corner("top-left")
+        if hasattr(Plot, "legend_keys"):
+            self.plot.legend_keys = True
+        if not self.places:
+            return
+        for row in rows:
+            members = [p for p, c in zip(self.places, categories) if c == row]
+            self.plot.add_geo_points(
+                [p.lat for p in members],
+                [p.lon for p in members],
+                color=colors[row],
+                sizes=[node_size(theme, len(p.members)) for p in members],
+                name=row if row in self.legend_rows else None,
+            )
+        for tier, (_, label, alpha, width) in enumerate(TIERS):
+            pairs = [pair for pair, nodes in self.links.items() if arc_tier(len(nodes)) == tier]
             if not pairs:
                 continue
-            self.plot.add_geo_arcs(
-                [places[a].lat for a, _ in pairs],
-                [places[a].lon for a, _ in pairs],
-                [places[b].lat for _, b in pairs],
-                [places[b].lon for _, b in pairs],
-                color=color,
+            ends = [((self.places[a].lat, self.places[a].lon), (self.places[b].lat, self.places[b].lon)) for a, b in pairs]
+            handle = self.plot.add_geo_arcs(
+                [a[0] for a, _ in ends],
+                [a[1] for a, _ in ends],
+                [b[0] for _, b in ends],
+                [b[1] for _, b in ends],
+                # the legend swatch: the tier's colour at rest, on the canvas
+                color=tuple(round(c * alpha / 255 + k * (1 - alpha / 255)) for c, k in zip(ARC, canvas)),
                 width=width,
-                height=height,
-                name=label,
+                height=[arc_height(a, b) for a, b in ends],
+                name=label if lens.legend is None else None,
             )
-        groups = label_groups(places)
+            self.arcs.append((handle, alpha, pairs))
+        self.light(None)
+        groups = label_groups(self.places)[: max(1, theme.labels)]
         self.plot.add_geo_labels(
-            [places[g[0]].lat for g in groups],
-            [places[g[0]].lon for g in groups],
-            [", ".join(f"{places[i].node.name} · {len(places[i].members)}" for i in g) for g in groups],
+            [self.places[g[0]].lat for g in groups],
+            [self.places[g[0]].lon for g in groups],
+            [", ".join(f"{self.places[i].node.name} · {len(self.places[i].members)}" for i in g) for g in groups],
             size=0.9,
         )
-        busiest = max(places, key=lambda p: len(p.members))
-        self.plot.look_at(busiest.lat, busiest.lon)
+        self.look_home()
 
-    def compose(self) -> ComposeResult:
-        yield Header()
-        with Horizontal(id="body"):
-            yield PlotWidget(self.plot, id="plot", pickable=True)
-            with VerticalScroll(id="sidebar"):
-                yield Static("", id="sb-title")
-                yield Static("", id="sb-body")
-        yield Footer()
+    def look_home(self) -> None:
+        """Turn the globe to the busiest place."""
+        if self.places:
+            busiest = max(self.places, key=lambda p: len(p.members))
+            self.plot.look_at(busiest.lat, busiest.lon)
 
-    def on_mount(self) -> None:
-        self.query_one("#plot", PlotWidget).focus()
-        self._show_overview()
+    def light(self, i: int | None) -> bool:
+        """Light the arcs of place `i` and dim every other one, or put them
+        all back at rest (`None`); True when that changed the picture."""
+        if i == self.lit and self.arcs and i is not None:
+            return False
+        changed = i != self.lit
+        self.lit = i
+        for handle, alpha, pairs in self.arcs:
+            if i is None:
+                runs = [(*ARC, alpha)] * len(pairs)
+            else:
+                runs = [(*LIT, 255) if i in pair else (*ARC, DIM) for pair in pairs]
+            self.plot.set_line_run_rgba(handle, runs)
+        return changed
 
-    def _set_sidebar(self, title: str, body: str) -> None:
-        self.query_one("#sb-title", Static).update(escape(title))
-        self.query_one("#sb-body", Static).update(body)
+    def positions(self) -> tuple[list[float], ...]:
+        return ([], [], [])
 
-    def _label(self, node_id: str) -> str:
-        return escape(self.graph.nodes[node_id].name)
+    # -- what the sidebar says -------------------------------------------------
 
-    def _show_overview(self) -> None:
-        scene = self.scene
-        people = {m for p in scene.places for m in p.members}
-        lines = [f"{len(scene.places)} places, {len(people)} located, {len(scene.links)} links"]
-        if self.filters:
-            lines.append(escape(self.filters))
-        lines += ["", HINT]
-        if scene.unplaced:
-            lines += ["", f"[bold]No place known[/bold] ({len(scene.unplaced)})"]
-            lines += [f"[dim]{self._label(n)}[/dim]" for n in scene.unplaced]
-        self._set_sidebar(self.graph.root.name, "\n".join(lines))
+    def overview(self) -> list[str]:
+        placed = {m for p in self.places for m in p.members}
+        lines = [
+            f"{len(self.places)} places, {len(placed)} placed, {len(self.links)} links",
+            f"[dim]placing {escape(', '.join(self.who) or 'nothing')} via {escape(', '.join(self.via))}[/dim]",
+        ]
+        if self.geo.unplaced:
+            lines.append(f"[dim]{len(self.geo.unplaced)} with no place known[/dim]")
+        return lines
 
-    def _show_place(self, i: int) -> None:
-        place = self.scene.places[i]
-        country = next((f.value for f in self.graph.facts(place.node.id, self.at) if f.key == "country"), "")
-        lines = [f"[dim]{escape(str(country))}  {place.lat:.2f}, {place.lon:.2f}[/dim]", ""]
-        lines.append(f"[bold]{' / '.join(self.who).capitalize()}[/bold] ({len(place.members)})")
+    def place_lines(self, i: int, at: At) -> list[str]:
+        """A place: where it is, what is there by type, the places it links to."""
+        graph = self.graph
+        place = self.places[i]
+        lines = [f"[dim]{escape(place.node.type)} · {place.lat:.2f}, {place.lon:.2f}[/dim]"]
+        by_type: dict[str, list[str]] = {}
         for member in place.members:
-            via = [
-                self._label(e.to)
-                for e in self.graph.out_edges(member, self.at)
-                if e.rel in ("based_in", "affiliated_with") and e.to in self.graph.nodes
-            ]
-            lines.append(f"{self._label(member)}" + (f" [dim]· {', '.join(via)}[/dim]" if via else ""))
-        work = sorted(
-            {other.id for m in place.members for other, e in self.graph.in_edges(m, self.at)}
-            | {e.to for m in place.members for e in self.graph.out_edges(m, self.at) if e.rel == "authored"},
-            key=lambda n: self.graph.nodes[n].name,
-        )
-        work = [n for n in work if self.graph.nodes[n].type not in ("city", "organisation")]
-        if work:
-            lines += ["", f"[bold]Their work[/bold] ({len(work)})"] + [self._label(n) for n in work]
+            by_type.setdefault(graph.nodes[member].type, []).append(member)
+        for type, members in sorted(by_type.items()):
+            lines += ["", f"[bold]{escape(type)}[/bold] ({len(members)})"]
+            for member in sorted(members, key=lambda m: graph.nodes[m].name):
+                through = [
+                    escape(graph.nodes[e.to].name)
+                    for e in graph.out_edges(member, at)
+                    if e.rel in self.via and e.to in graph.nodes and e.to != place.node.id
+                ]
+                lines.append(escape(graph.nodes[member].name) + (f" [dim]· {', '.join(through)}[/dim]" if through else ""))
         linked = sorted(
-            ((b if a == i else a, nodes) for (a, b), nodes in self.scene.links.items() if i in (a, b)),
+            ((b if a == i else a, nodes) for (a, b), nodes in self.links.items() if i in (a, b)),
             key=lambda kv: -len(kv[1]),
         )
         if linked:
             lines += ["", "[bold]Linked places[/bold]"]
-            lines += [f"{escape(self.scene.places[j].node.name)} [dim]· {len(nodes)}[/dim]" for j, nodes in linked]
-        self._set_sidebar(place.node.name, "\n".join(lines))
-
-    @on(PlotWidget.ElementHovered)
-    def _hovered(self, message: PlotWidget.ElementHovered) -> None:
-        element = message.element
-        if element is not None and element[0] == "node" and element[1] < len(self.scene.places):
-            place = self.scene.places[element[1]]
-            self.sub_title = f"{place.node.name} · {len(place.members)}"
-        else:
-            self.sub_title = self.filters
-
-    @on(PlotWidget.ElementPicked)
-    def _picked(self, message: PlotWidget.ElementPicked) -> None:
-        element = message.element
-        if element is not None and element[0] == "node" and element[1] < len(self.scene.places):
-            self._show_place(element[1])
-        else:
-            self._show_overview()
-
-    def action_deselect(self) -> None:
-        self.plot.set_selected(None)
-        self.query_one("#plot", PlotWidget).invalidate()
-        self._show_overview()
-
-    def action_reset_view(self) -> None:
-        self.plot.reset()
-        if self.scene.places:
-            busiest = max(self.scene.places, key=lambda p: len(p.members))
-            self.plot.look_at(busiest.lat, busiest.lon)
-        self.query_one("#plot", PlotWidget).invalidate()
+            lines += [f"{escape(self.places[j].node.name)} [dim]· {len(nodes)}[/dim]" for j, nodes in linked]
+        return lines

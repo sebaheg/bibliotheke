@@ -234,6 +234,7 @@ def rename_node_type(marker: dict[str, Any], old: str, new: str) -> dict[str, An
             types = _types(spec.get(end))
             if old in types:
                 spec[end] = _one_or_list([new if t == old else t for t in types])
+    _rewrite_view(marker, "type", old, new)
     return _checked(marker)
 
 
@@ -245,6 +246,7 @@ def rename_fact(marker: dict[str, Any], type: str, old: str, new: str) -> dict[s
         raise ModelError(f"a {type} already has a fact {new!r}")
     _node(marker, type)["facts"] = {new if key == old else key: spec for key, spec in facts.items()}
     _rename_placeholder(_node(marker, type), old, new)
+    _rewrite_view(marker, "fact", old, new)
     return _checked(marker)
 
 
@@ -259,12 +261,22 @@ def rename_edge(marker: dict[str, Any], old: str, new: str) -> dict[str, Any]:
     for type in _types(edges[old].get("from")):
         if type in marker["nodes"]:
             _rename_placeholder(_node(marker, type), old, new)
+    _rewrite_view(marker, "rel", old, new)
     return _checked(marker)
 
 
 def _rename_placeholder(spec: dict[str, Any], old: str, new: str) -> None:
     if spec.get("id"):
         spec["id"] = str(spec["id"]).replace(f"<{old}>", f"<{new}>")
+
+
+def _rewrite_view(marker: dict[str, Any], kind: str, old: str, new: str | None) -> None:
+    """The view settings follow a rename or a drop, so a lens never names
+    what the model no longer has."""
+    from bibliotheke import lenses
+
+    if isinstance(marker.get("view"), dict):
+        marker["view"] = lenses.rewrite(marker["view"], kind, old, new)
 
 
 # -- drop --------------------------------------------------------------------------
@@ -281,6 +293,7 @@ def drop_node_type(marker: dict[str, Any], type: str) -> dict[str, Any]:
             del marker["edges"][rel]
         else:
             spec["from"], spec["to"] = _one_or_list(ends["from"]), _one_or_list(ends["to"])
+    _rewrite_view(marker, "type", type, None)
     return _checked(marker)
 
 
@@ -290,6 +303,7 @@ def drop_fact(marker: dict[str, Any], type: str, key: str) -> dict[str, Any]:
     if f"<{key}>" in str(spec.get("id") or ""):
         raise ModelError(f"the {type} id template {spec['id']!r} uses <{key}>; change the template first")
     del facts[key]
+    _rewrite_view(marker, "fact", key, None)
     return _checked(marker)
 
 
@@ -300,6 +314,7 @@ def drop_edge(marker: dict[str, Any], rel: str) -> dict[str, Any]:
     for type, spec in marker["nodes"].items():
         if spec and f"<{rel}>" in str(spec.get("id") or ""):
             raise ModelError(f"the {type} id template {spec['id']!r} uses <{rel}>; change the template first")
+    _rewrite_view(marker, "rel", rel, None)
     return _checked(marker)
 
 
@@ -448,8 +463,14 @@ def _ends(spec: EdgeSpec) -> str:
 def _node_changes(type: str, a: NodeSpec, b: NodeSpec) -> Iterator[Change]:
     if a.id != b.id:
         yield Change(ADDITIVE if b.id is None else DESTRUCTIVE, type, f"id template {a.id!r} → {b.id!r}")
-    if a.description != b.description or a.body != b.body:
+    if a.description != b.description or a.body != b.body or a.name != b.name:
         yield Change(NEUTRAL, type, "description changed")
+    if a.time != b.time:
+        # How the type's records read in time, not what they may hold: nothing breaks.
+        yield Change(NEUTRAL, type, f"time {a.time} → {b.time}")
+    if a.starts != b.starts:
+        # When its nodes show in a valid-time view: a reading, not a constraint.
+        yield Change(NEUTRAL, type, f"starts {', '.join(a.starts) or '-'} → {', '.join(b.starts) or '-'}")
     old, new = a.facts or {}, b.facts or {}
     for key in _in_order(old, new):
         where = f"{type}.{key}"

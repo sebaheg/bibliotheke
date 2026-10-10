@@ -87,3 +87,10 @@ async def test_browser_walks_types_to_nodes(tmp_path):
         await pilot.press("escape")
         await pilot.pause(0.2)
         assert len(tree.root.children) == 3
+
+
+def test_no_textual_command_palette_anywhere():
+    from bibliotheke.browse import Browser
+    from bibliotheke.view import GraphView
+
+    assert not any(app.ENABLE_COMMAND_PALETTE for app in (Browser, GraphView))

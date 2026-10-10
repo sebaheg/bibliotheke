@@ -26,7 +26,7 @@ def repo(
     theme: Annotated[Optional[str], typer.Option("--theme", help="'map' (default) or 'classic'.")] = None,
     lens: Annotated[
         Optional[str],
-        typer.Option("--lens", help="Start on this lens: structure (default), map, dependencies, coupling or people; the number keys switch."),
+        typer.Option("--lens", help="Start on this lens: structure (default), map, dependencies, coupling or people; j/k and tab switch."),
     ] = None,
     rels: Annotated[
         Optional[list[str]],
@@ -71,32 +71,19 @@ def repo(
 
         typer.echo(json.dumps(summary, indent=2))
         return
+    from bibliotheke import lenses as declared
     from bibliotheke.repo import presets
-    from bibliotheke.view import GraphView, Lens
+    from bibliotheke.view import GraphView
 
-    settings = graph.marker.get("view") or {}
-    color_by = color_by or settings.get("color_by") or "dir"
+    # A lens of the user's own (--rel): the given relations, as a tree when
+    # `contains` is among them and asked for, else a force layout.
+    tree = "contains" if rels and layout != "force" and "contains" in rels else None
     try:
-        lenses = presets.lenses(graph, theme or settings.get("theme") or "map", color_by)
-    except ValueError as error:
-        raise GraphError(str(error)) from error
-    if rels:
-        # A lens of the user's own: the given relations, as a tree when the
-        # tree relation is among them and asked for, else a force layout.
-        own = lenses[0]
-        tree = "contains" if layout != "force" and "contains" in rels else None
-        lenses = [Lens("Custom", ", ".join(rels), list(rels), tree, own.color_by, own.theme, own.group, own.weight, own.label)]
-    elif lens:
-        names = [each.name.lower() for each in lenses]
-        matches = [i for i, name in enumerate(names) if name.startswith(lens.lower())]
-        if len(matches) != 1:
-            raise GraphError(f"--lens must be one of {', '.join(names)}")
-        lenses = lenses[matches[0] :] + lenses[: matches[0]]
-    # Without a time the repository is shown as it is now: deleted files gone,
-    # a moved file under its current path only. (A graph read with no filter
-    # shows every version that ever was valid, which suits history, not this.)
-    try:
-        at = At(valid_at=valid_at or timeutil.now())
+        lenses = presets.lenses(graph, theme, color_by, rels=rels, tree=tree, lens=lens)
+        # Without a time the repository is shown as it is now (the marker's
+        # `valid_at: now`): deleted files gone, a moved file under its
+        # current path only.
+        at = At(valid_at=valid_at or declared.valid_at(graph) or timeutil.now())
     except ValueError as error:
         raise GraphError(str(error)) from error
     GraphView(graph, at, lenses=lenses).run()

@@ -56,7 +56,44 @@ MARKER: dict[str, Any] = {
         },
         "imports": {"from": "file", "to": "file", "description": "The file imports, includes or declares the other."},
     },
-    "view": {"theme": "map", "color_by": "dir", "labels": 20},
+    # How it is drawn: directories and the `contains` edges are the
+    # structure, so they are quiet greys; files are the content, coloured by
+    # top-level directory (presets.py picks the hues) and sized by how many
+    # files import them, which is also what earns a label. Five lenses, each
+    # answering a different question; the first is the default.
+    "view": {
+        "theme": "plotui",
+        "color_by": "dir",
+        "size_by": "in:imports",
+        "labels": {"count": 6, "types": ["file"]},
+        "valid_at": "now",  # deleted files gone, a moved file under its current path only
+        "edges": {"contains": "#4a4d56", "imports": "#8e92a2", "touched": "#6e608c", "co_changed": "#5a5c68"},
+        "lenses": [
+            {
+                "name": "Structure",
+                "description": "the directory tree, and what imports what across it",
+                "rels": ["contains", "imports"],
+                "tree": "contains",
+            },
+            {
+                "name": "Map",
+                "description": "the same, as a force layout: clusters find their own place",
+                "rels": ["contains", "imports"],
+            },
+            {
+                "name": "Dependencies",
+                "description": "files alone, held together only by what imports what",
+                "rels": ["imports"],
+            },
+            {
+                "name": "Coupling",
+                "description": "files that keep changing in the same commits, however far apart they live",
+                "rels": ["co_changed"],
+                "min_parallel": 3,  # commits two files must have changed in together to count
+            },
+            {"name": "People", "description": "who has touched which files", "rels": ["touched"]},
+        ],
+    },
 }
 
 
