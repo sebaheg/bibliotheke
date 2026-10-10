@@ -63,6 +63,7 @@ def arc_tier(count: int) -> int:
 
 class GlobeView(App):
     CSS = """
+    HeaderIcon { display: none; }  /* the command-palette button; ^p still opens it */
     #body { height: 1fr; }
     #plot { width: 1fr; height: 1fr; }
     #sidebar { width: 44; height: 1fr; background: $panel; border-left: thick $accent; padding: 0 1; }

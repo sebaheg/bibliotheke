@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import subprocess
+import tempfile
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Callable, Optional
 
 import typer
 import yaml
@@ -12,9 +16,11 @@ from rich.console import Console
 from rich.table import Table
 
 from bibliotheke import analysis
+from bibliotheke import modeledit
 from bibliotheke import diff as differ
 from bibliotheke import export as exporter
 from bibliotheke import store
+from bibliotheke.datamodel import DataModel, ModelError
 from bibliotheke.graph import At, Graph, GraphError
 from bibliotheke.model import Node, Record
 
@@ -25,6 +31,17 @@ app = typer.Typer(
 )
 add_app = typer.Typer(help="Add a node, a fact or an edge.", no_args_is_help=True)
 app.add_typer(add_app, name="add")
+model_app = typer.Typer(
+    help="Show the data model, or change it: add, rename and drop types, facts and edges; diff it between commits; edit it.",
+    invoke_without_command=True,
+)
+app.add_typer(model_app, name="model")
+model_add = typer.Typer(help="Add a node type, a fact, an edge or a vocabulary to the model.", no_args_is_help=True)
+model_rename = typer.Typer(help="Rename a node type, a fact or an edge, and rewrite the records that use it.", no_args_is_help=True)
+model_drop = typer.Typer(help="Drop a node type, a fact or an edge from the model.", no_args_is_help=True)
+model_app.add_typer(model_add, name="add")
+model_app.add_typer(model_rename, name="rename")
+model_app.add_typer(model_drop, name="drop")
 
 # The repository scanner lives in its own package and only uses the public API;
 # this is the one place the rest of bibliotheke refers to it.
@@ -490,13 +507,17 @@ def diff(
     out.print(table)
 
 
-@app.command()
-def model(as_json: AsJson = False, at_commit: AtCommit = None, root: Root = None) -> None:
+@model_app.callback()
+def model(ctx: typer.Context, as_json: AsJson = False, at_commit: AtCommit = None, root: Root = None) -> None:
     """Show the graph's data model: its node types, their facts, and the edges between them.
 
     The model lives in bibliotheke.yaml as `description`, `time`,
     `vocabularies`, `nodes` and `edges`. Writes that break it are refused.
+    The subcommands change it; each one rewrites bibliotheke.yaml (comments
+    are not kept) and then checks the data against the new model.
     """
+    if ctx.invoked_subcommand is not None:
+        return
     graph = _open(root, at_commit)
     if graph.model is None:
         if as_json:
@@ -550,6 +571,323 @@ def model(as_json: AsJson = False, at_commit: AtCommit = None, root: Root = None
         out.print("[bold]Vocabularies[/bold]")
         for name, values in data["vocabularies"].items():
             out.print(f"  {name}: {', '.join(values)}")
+
+
+Force = Annotated[bool, typer.Option("--force", help="Go ahead even though current records break.")]
+Description = Annotated[str, typer.Option("--description", help="What this is, for readers of the model.")]
+
+
+def _model_write(root: Path | None, change: Callable[[dict[str, Any]], dict[str, Any]], done: str) -> Graph:
+    """Apply a change to bibliotheke.yaml, say what was done, and return the
+    reopened graph."""
+    graph = _open(root)
+    graph._mutable()
+    try:
+        marker = change(graph.marker)
+    except ModelError as error:
+        raise GraphError(str(error)) from None
+    modeledit.save_marker(graph.root, marker)
+    out.print(done)
+    return _open(graph.root)
+
+
+def _model_report(graph: Graph) -> None:
+    """The data against the (new) model; exit 1 when something breaks."""
+    problems = graph.model.problems(graph.nodes, graph.root) if graph.model else []
+    _print_problems(problems)
+    if problems:
+        raise typer.Exit(1)
+
+
+def _print_problems(problems: list[str]) -> None:
+    if not problems:
+        out.print("[green]Data OK[/green]")
+        return
+    out.print(f"[red]{len(problems)} problem{'s' if len(problems) != 1 else ''} in the data:[/red]")
+    for problem in problems:
+        err.print(f"  {problem}")
+
+
+def _print_changes(title: str, changes: list[modeledit.Change]) -> None:
+    out.print(f"[bold]{title}[/bold]")
+    if not changes:
+        out.print("  no change")
+        return
+    marks = {modeledit.ADDITIVE: "[green]+[/green]", modeledit.DESTRUCTIVE: "[red]-[/red]", modeledit.NEUTRAL: "[dim]~[/dim]"}
+    table = Table(box=None, pad_edge=False, show_header=False)
+    for column in ("mark", "where", "what", "kind"):
+        table.add_column(column, style="dim" if column == "kind" else None)
+    for kind in modeledit.KINDS:
+        for change in changes:
+            if change.kind == kind:
+                table.add_row(f"  {marks[kind]}", change.where, change.what, kind)
+    out.print(table)
+
+
+def _csv(text: str) -> list[str]:
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+@model_add.command("node")
+def model_add_node(
+    type: Annotated[str, typer.Argument(help="Node type, lowercase with hyphens, e.g. part-of-speech.")],
+    description: Description = "",
+    id: Annotated[Optional[str], typer.Option("--id", help="Id template, e.g. '<name>-<lang>'.")] = None,
+    body: Annotated[str, typer.Option("--body", help="What the Markdown body holds.")] = "",
+    root: Root = None,
+) -> None:
+    """Add a node type. On a graph without a model, this starts one."""
+    graph = _model_write(
+        root,
+        lambda m: modeledit.add_node_type(m, type, description=description, id=id, body=body),
+        f"Added node type {type}",
+    )
+    _model_report(graph)
+
+
+@model_add.command("fact")
+def model_add_fact(
+    type: Annotated[str, typer.Argument(help="Node type the fact belongs to.")],
+    key: Annotated[str, typer.Argument(help="Fact key, e.g. lang.")],
+    kind: Annotated[str, typer.Argument(metavar="FACT_TYPE", help="text, int, number, bool, time, url, file or enum.")] = "text",
+    values: Annotated[
+        Optional[str], typer.Option("--values", help="For an enum: comma-separated values, or the name of a vocabulary.")
+    ] = None,
+    required: Annotated[bool, typer.Option("--required", help="Every node of the type must have it.")] = False,
+    many: Annotated[bool, typer.Option("--many", help="Several values at once, not one.")] = False,
+    description: Description = "",
+    root: Root = None,
+) -> None:
+    """Add a fact to a node type, e.g. `bib model add fact word lang enum --values en,sv --required`."""
+
+    def change(marker: dict[str, Any]) -> dict[str, Any]:
+        given: list[str] | str | None = None
+        if values is not None:
+            given = values if values in (marker.get("vocabularies") or {}) else _csv(values)
+        return modeledit.add_fact(
+            marker, type, key, kind=kind, required=required, many=many, values=given, description=description
+        )
+
+    _model_report(_model_write(root, change, f"Added fact {type}.{key} ({kind})"))
+
+
+@model_add.command("edge")
+def model_add_edge(
+    rel: Annotated[str, typer.Argument(help="Relation, e.g. works_at.")],
+    src: Annotated[str, typer.Argument(metavar="FROM", help="Source node type(s), comma-separated.")],
+    dst: Annotated[str, typer.Argument(metavar="TO", help="Target node type(s), comma-separated.")],
+    symmetric: Annotated[bool, typer.Option("--symmetric", help="Reads the same in either direction; stored once.")] = False,
+    required: Annotated[bool, typer.Option("--required", help="Every source node must have one.")] = False,
+    many: Annotated[bool, typer.Option("--many/--one", help="Any number of targets at once (default), or one.")] = True,
+    description: Description = "",
+    root: Root = None,
+) -> None:
+    """Add an edge between node types, e.g. `bib model add edge translates_to word word --symmetric`."""
+    graph = _model_write(
+        root,
+        lambda m: modeledit.add_edge(
+            m, rel, _csv(src), _csv(dst), symmetric=symmetric, required=required, many=many, description=description
+        ),
+        f"Added edge {rel}: {src} {'↔' if symmetric else '→'} {dst}",
+    )
+    _model_report(graph)
+
+
+@model_add.command("vocabulary")
+def model_add_vocabulary(
+    name: Annotated[str, typer.Argument(help="Vocabulary name, e.g. lang.")],
+    values: Annotated[list[str], typer.Argument(help="Its values.")],
+    root: Root = None,
+) -> None:
+    """Add a named list of values that enum facts can share."""
+    _model_report(_model_write(root, lambda m: modeledit.add_vocabulary(m, name, values), f"Added vocabulary {name}"))
+
+
+@model_rename.command("node")
+def model_rename_node(
+    old: Annotated[str, typer.Argument(help="Current node type.")],
+    new: Annotated[str, typer.Argument(help="New node type.")],
+    root: Root = None,
+) -> None:
+    """Rename a node type and move its nodes to nodes/<new>/."""
+    graph = _open(root)
+    graph._mutable()
+    try:
+        marker = modeledit.rename_node_type(graph.marker, old, new)
+    except ModelError as error:
+        raise GraphError(str(error)) from None
+    moved = modeledit.rewrite_node_type(graph.nodes, graph.root, old, new)
+    modeledit.save_marker(graph.root, marker)
+    out.print(f"Renamed node type {old} to {new}; moved {moved} node{'s' if moved != 1 else ''}")
+    _model_report(_open(graph.root))
+
+
+@model_rename.command("fact")
+def model_rename_fact(
+    type: Annotated[str, typer.Argument(help="Node type the fact belongs to.")],
+    old: Annotated[str, typer.Argument(help="Current key.")],
+    new: Annotated[str, typer.Argument(help="New key.")],
+    root: Root = None,
+) -> None:
+    """Rename a fact key and rewrite every version of the facts that use it."""
+    graph = _open(root)
+    graph._mutable()
+    try:
+        marker = modeledit.rename_fact(graph.marker, type, old, new)
+    except ModelError as error:
+        raise GraphError(str(error)) from None
+    count = modeledit.rewrite_fact_key(graph.nodes, graph.root, type, old, new)
+    modeledit.save_marker(graph.root, marker)
+    out.print(f"Renamed fact {type}.{old} to {type}.{new} in {count} record{'s' if count != 1 else ''}")
+    _model_report(_open(graph.root))
+
+
+@model_rename.command("edge")
+def model_rename_edge(
+    old: Annotated[str, typer.Argument(help="Current relation.")],
+    new: Annotated[str, typer.Argument(help="New relation.")],
+    root: Root = None,
+) -> None:
+    """Rename a relation and rewrite every version of the edges that use it."""
+    graph = _open(root)
+    graph._mutable()
+    try:
+        marker = modeledit.rename_edge(graph.marker, old, new)
+    except ModelError as error:
+        raise GraphError(str(error)) from None
+    count = modeledit.rewrite_rel(graph.nodes, graph.root, old, new)
+    modeledit.save_marker(graph.root, marker)
+    out.print(f"Renamed edge {old} to {new} in {count} record{'s' if count != 1 else ''}")
+    _model_report(_open(graph.root))
+
+
+@model_drop.command("node")
+def model_drop_node(
+    type: Annotated[str, typer.Argument(help="Node type to drop.")],
+    root: Root = None,
+) -> None:
+    """Drop a node type. Refused while nodes of the type exist: delete or rename them first."""
+    graph = _open(root)
+    if count := modeledit.uses(graph.nodes, type=type):
+        raise GraphError(f"{count} node{'s are' if count != 1 else ' is'} of type {type!r}; delete or `bib model rename node` them first")
+    _model_report(_model_write(root, lambda m: modeledit.drop_node_type(m, type), f"Dropped node type {type}"))
+
+
+@model_drop.command("fact")
+def model_drop_fact(
+    type: Annotated[str, typer.Argument(help="Node type the fact belongs to.")],
+    key: Annotated[str, typer.Argument(help="Fact key to drop.")],
+    force: Force = False,
+    root: Root = None,
+) -> None:
+    """Drop a fact from a node type. With --force, current facts with the key are retracted (they stay in history)."""
+    graph = _open(root)
+    count = modeledit.uses(graph.nodes, type=type, key=key)
+    if count and not force:
+        raise GraphError(f"{count} current record{'s' if count != 1 else ''} use{'' if count != 1 else 's'} {type}.{key}; --force retracts them")
+    graph = _model_write(root, lambda m: modeledit.drop_fact(m, type, key), f"Dropped fact {type}.{key}")
+    if count:
+        retracted = modeledit.retract_all(graph.nodes, graph.root, type=type, key=key)
+        out.print(f"Retracted {retracted} record{'s' if retracted != 1 else ''}")
+    _model_report(_open(graph.root))
+
+
+@model_drop.command("edge")
+def model_drop_edge(
+    rel: Annotated[str, typer.Argument(help="Relation to drop.")],
+    force: Force = False,
+    root: Root = None,
+) -> None:
+    """Drop an edge from the model. With --force, current edges of the relation are retracted (they stay in history)."""
+    graph = _open(root)
+    count = modeledit.uses(graph.nodes, rel=rel)
+    if count and not force:
+        raise GraphError(f"{count} current record{'s' if count != 1 else ''} use{'' if count != 1 else 's'} {rel}; --force retracts them")
+    graph = _model_write(root, lambda m: modeledit.drop_edge(m, rel), f"Dropped edge {rel}")
+    if count:
+        retracted = modeledit.retract_all(graph.nodes, graph.root, rel=rel)
+        out.print(f"Retracted {retracted} record{'s' if retracted != 1 else ''}")
+    _model_report(_open(graph.root))
+
+
+@model_app.command("diff")
+def model_diff(
+    rev1: Annotated[str, typer.Argument(help="Git revision to compare from.")] = "HEAD",
+    rev2: Annotated[Optional[str], typer.Argument(help="Git revision to compare to. Default: the working tree.")] = None,
+    as_json: AsJson = False,
+    root: Root = None,
+) -> None:
+    """How the model changed between two git revisions, and what the change breaks.
+
+    Each change is marked additive (+), destructive (-) or neutral (~), then
+    the data is checked against the newer model. Exits 1 when something breaks.
+    """
+    old = _open(root, rev1)
+    new = _open(root, rev2)
+    changes = modeledit.diff_models(old.model, new.model)
+    problems = new.model.problems(new.nodes, new.root) if new.model else []
+    if as_json:
+        _echo_json(
+            {
+                "from": old.source.commit,
+                "to": new.source.commit if rev2 else "working tree",
+                "changes": [c.to_dict() for c in changes],
+                "problems": problems,
+            }
+        )
+    else:
+        _print_changes(f"Model changes, {rev1} → {rev2 or 'working tree'}", changes)
+        _print_problems(problems)
+    if problems:
+        raise typer.Exit(1)
+
+
+def _edit_text(text: str) -> str:
+    """The text after the user edits it in $VISUAL or $EDITOR (default: vi)."""
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as handle:
+        handle.write(text)
+        path = Path(handle.name)
+    try:
+        done = subprocess.run([*shlex.split(editor), str(path)], check=False)
+        if done.returncode:
+            raise GraphError(f"{editor} exited with status {done.returncode}; nothing saved")
+        return path.read_text(encoding="utf-8")
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@model_app.command("edit")
+def model_edit(force: Force = False, root: Root = None) -> None:
+    """Edit bibliotheke.yaml in $EDITOR, with the result checked before it is saved.
+
+    The edited file is parsed, diffed against the current model and checked
+    against the data. A change that breaks current records is not saved
+    unless --force.
+    """
+    graph = _open(root)
+    graph._mutable()
+    path = graph.root / store.ROOT_MARKER
+    before = path.read_text()
+    after = _edit_text(before)
+    if after is None or after == before:
+        out.print("No change")
+        return
+    try:
+        marker = yaml.safe_load(after)
+        if not isinstance(marker, dict):
+            raise ModelError("must be a mapping")
+        model = DataModel.from_marker(marker)
+    except (yaml.YAMLError, ModelError) as error:
+        raise GraphError(f"not saved: {error}") from None
+    changes = modeledit.diff_models(graph.model, model)
+    problems = model.problems(graph.nodes, graph.root) if model else []
+    _print_changes("Model changes", changes)
+    _print_problems(problems)
+    if problems and not force:
+        raise GraphError("not saved; fix the data or the model, or pass --force to save anyway")
+    path.write_text(after)
+    out.print(f"Saved {store.ROOT_MARKER}")
 
 
 @app.command()

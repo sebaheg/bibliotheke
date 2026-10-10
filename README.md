@@ -33,7 +33,7 @@ bib retract e1a2b3c                   # hides it from the current graph
 bib history geoffrey-hinton           # every version, including superseded ones
 ```
 
-Other commands: `bib list`, `bib search <text>`, `bib check`, `bib import`, `bib export`, `bib path`, `bib rank`, `bib communities`, `bib diff`. The read commands take `--valid-at`, `--known-at` and `--changed-at`, alone or combined, and `--at-commit <rev>` to read the graph as it was in a git commit. Time values are `YYYY`, `YYYY-MM`, `YYYY-MM-DD` or an ISO timestamp; `--valid-to 2023` means through the end of 2023.
+Other commands: `bib list`, `bib search <text>`, `bib check`, `bib model`, `bib import`, `bib export`, `bib path`, `bib rank`, `bib communities`, `bib diff`. The read commands take `--valid-at`, `--known-at` and `--changed-at`, alone or combined, and `--at-commit <rev>` to read the graph as it was in a git commit. Time values are `YYYY`, `YYYY-MM`, `YYYY-MM-DD` or an ISO timestamp; `--valid-to 2023` means through the end of 2023.
 
 ## Files
 
@@ -100,6 +100,35 @@ edges:
 Node types are lowercase with hyphens (`part-of-speech`). Fact types are `text`, `int`, `number`, `bool`, `time`, `url`, `file` and `enum`; `int: frequency` is short for `{type: int}`. An enum takes its `values` inline or names a vocabulary. A fact takes one value at a time unless it says `many: true`. Edge `from` and `to` take a type or a list of types, and a `symmetric` edge is stored once, in either direction. Edges can be `required`, and take any number of targets unless they say `many: false`. A placeholder in an `id` template is `name`, a fact key, or an edge whose target id fills it in, so `<pos>` works whether part of speech is a fact or an edge to a `part-of-speech` node.
 
 With a model in place, `bib add`, `bib update` and `bib import` refuse anything it does not allow (unknown types, keys and edges, bad values, a second value for a single-valued fact or a second target for a single-target edge), and `bib import` fills in ids from the `id` template. `bib check` reports hand edits that break it, as well as missing required facts and edges, and ids that do not follow the template. `bib model` prints the model, and `bib model --json` gives it to agents. Without a `nodes:` section, a graph accepts anything.
+
+### Changing the model
+
+A model changes as a graph grows. `bib model` has subcommands for that, so a change is one command rather than a YAML edit plus a check, and each one rewrites `bibliotheke.yaml` and then checks the data against the new model:
+
+```sh
+bib model add node phrase --description "Several words with one meaning"
+bib model add fact word frequency int --description "Per million words"
+bib model add fact word pos enum --values noun,verb,adjective --required
+bib model add edge part_of word phrase --one          # one target at a time
+bib model add vocabulary register formal informal slang
+bib model rename fact word lang language              # rewrites every record, and the id template
+bib model rename edge translates_to same_as
+bib model rename node source reference                # moves nodes/source/ to nodes/reference/
+bib model drop fact word example                      # refused while current records use it
+bib model drop fact word example --force              # retracts them instead; they stay in history
+```
+
+A rename rewrites every version of the records that use the old name, superseded ones included, and leaves their time stamps alone: it is a change of vocabulary, not of what is known, and git keeps the old name. The model governs current records only, so a drop retracts what still uses the key or relation and history is left as it was. A node type cannot be dropped while nodes of that type exist.
+
+For a bigger change, edit the file and let `bib` judge it:
+
+```sh
+bib model edit                 # opens bibliotheke.yaml in $EDITOR, checks the result before saving
+bib model diff                 # how the model changed since HEAD, and what that breaks
+bib model diff v1 v2 --json    # between two commits, for agents
+```
+
+Both classify every change as additive (`+`, nothing that was allowed is refused: a new type, an optional fact, an enum value), destructive (`-`, something that was allowed is now refused: a fact removed, a fact made required, an enum value dropped, a type changed, a template changed) or neutral (`~`, descriptions), then list the current records that break the newer model. `bib model edit` does not save a model that current records break unless you pass `--force`; `bib model diff` exits 1 in that case. Comments in `bibliotheke.yaml` survive `bib model edit` but not the other subcommands, which rewrite the file.
 
 ## Bodies and files
 
