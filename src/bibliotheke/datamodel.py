@@ -11,6 +11,7 @@ one accepts anything.
     nodes:
       word:
         description: A single word in one language.
+        name: The word as written.
         id: "<name>-<lang>"
         body: Usage notes.
         facts:
@@ -20,8 +21,10 @@ one accepts anything.
       translates_to: {from: word, to: word, symmetric: true}
       pos: {from: word, to: part_of_speech, required: true, many: false}
 
-An id template's placeholders name a fact key or, failing that, an edge
-whose target id fills it in. Facts take one value unless ``many: true``;
+Every node has an ``id``, a ``name`` and ``notes`` whatever its type; a
+type's ``name:`` says what the name is for that type, as ``body:`` says what
+its Markdown body holds. An id template's placeholders name a fact key or,
+failing that, an edge whose target id fills it in. Facts take one value unless ``many: true``;
 edges take many targets unless ``many: false``.
 """
 
@@ -37,6 +40,7 @@ from bibliotheke import timeutil
 from bibliotheke.model import Edge, Fact, Node, Record
 
 FACT_TYPES = ("text", "int", "number", "bool", "time", "url", "file", "enum")
+DEFAULT_NAME = "Display name."  # what a type's `name:` says unless the model says more
 TIME_MODES = ("tracked", "ignored")
 
 _PLACEHOLDER = re.compile(r"<([^<>]+)>")
@@ -65,6 +69,7 @@ class FactSpec:
 class NodeSpec:
     type: str
     description: str = ""
+    name: str = DEFAULT_NAME  # what the node's name is for this type
     id: str | None = None
     body: str = ""
     facts: dict[str, FactSpec] | None = None
@@ -272,6 +277,7 @@ class DataModel:
             "nodes": {
                 type: {
                     "description": spec.description,
+                    "name": spec.name,
                     "id": spec.id,
                     "body": spec.body,
                     "facts": {key: fact(f) for key, f in (spec.facts or {}).items()},
@@ -340,6 +346,7 @@ def _node_spec(type: str, raw: Any, vocabularies: dict[str, tuple[str, ...]]) ->
     return NodeSpec(
         type=type,
         description=str(raw.get("description") or "").strip(),
+        name=str(raw.get("name") or DEFAULT_NAME).strip(),
         id=str(raw["id"]) if raw.get("id") else None,
         body=str(raw.get("body") or "").strip(),
         facts=facts,

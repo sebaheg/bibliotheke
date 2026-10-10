@@ -538,6 +538,7 @@ def model(ctx: typer.Context, as_json: AsJson = False, at_commit: AtCommit = Non
     for type, spec in data["nodes"].items():
         out.print()
         out.print(f"[bold]{type}[/bold]  [dim]{spec['description']}[/dim]")
+        out.print(f"  name: {spec['name']}")
         if spec["id"]:
             out.print(f"  id: {spec['id']}")
         if spec["body"]:
@@ -635,6 +636,7 @@ def _csv(text: str) -> list[str]:
 def model_add_node(
     type: Annotated[str, typer.Argument(help="Node type, lowercase with hyphens, e.g. part-of-speech.")],
     description: Description = "",
+    name: Annotated[str, typer.Option("--name", help="What a node's name is for this type, e.g. 'Full name as printed'.")] = "",
     id: Annotated[Optional[str], typer.Option("--id", help="Id template, e.g. '<name>-<lang>'.")] = None,
     body: Annotated[str, typer.Option("--body", help="What the Markdown body holds.")] = "",
     root: Root = None,
@@ -642,7 +644,7 @@ def model_add_node(
     """Add a node type. On a graph without a model, this starts one."""
     graph = _model_write(
         root,
-        lambda m: modeledit.add_node_type(m, type, description=description, id=id, body=body),
+        lambda m: modeledit.add_node_type(m, type, description=description, name=name, id=id, body=body),
         f"Added node type {type}",
     )
     _model_report(graph)

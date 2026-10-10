@@ -79,7 +79,7 @@ def test_add_node_starts_a_model_and_reports_what_breaks(tmp_path):
     assert result.exit_code == 1
     assert "deepmind: the model has no node type 'organisation'" in result.output
     assert "nodes" not in marker(tmp_path), "a new model starts in the model/ folder"
-    assert yaml.safe_load((tmp_path / "model" / "person.yaml").read_text()) == {"description": "A human"}
+    assert yaml.safe_load((tmp_path / "model" / "person.yaml").read_text()) == {"description": "A human", "name": "Display name."}
     assert "Data OK" in run(tmp_path, "model", "add", "node", "organisation").output
     assert sorted(p.name for p in (tmp_path / "model").glob("*.yaml")) == ["organisation.yaml", "person.yaml"]
 
@@ -305,11 +305,13 @@ def test_split_moves_the_model_into_one_file_per_type(root):
 
 def test_folder_layout_edits_write_the_right_files(root):
     run(root, "model", "split")
-    run(root, "model", "add", "node", "phrase", "--description", "Several words")
+    run(root, "model", "add", "node", "phrase", "--description", "Several words", "--name", "The phrase as written")
     run(root, "model", "add", "edge", "part_of", "word", "phrase")
     run(root, "model", "add", "edge", "mentions", "source,phrase", "word")
     got = files(root)
-    assert got["phrase.yaml"] == {"description": "Several words"}
+    assert got["phrase.yaml"] == {"description": "Several words", "name": "The phrase as written"}
+    assert Graph.open(root).model.nodes["phrase"].name == "The phrase as written"
+    assert list(got["word.yaml"]) == ["description", "name", "id", "facts", "edges"], "built-in fields come first"
     assert got["word.yaml"]["edges"]["part_of"] == {"to": "phrase"}
     assert got["source.yaml"]["edges"]["mentions"] == {"from": ["source", "phrase"], "to": "word"}, "a multi-source edge keeps from, in its first type's file"
     assert Graph.open(root).model.edges["mentions"].sources == ("source", "phrase")

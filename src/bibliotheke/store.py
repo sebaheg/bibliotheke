@@ -23,6 +23,7 @@ from typing import Any, Iterable, Protocol
 
 import yaml
 
+from bibliotheke.datamodel import DEFAULT_NAME
 from bibliotheke.model import Node, TIME_FIELDS
 
 ROOT_MARKER = "bibliotheke.yaml"
@@ -307,7 +308,10 @@ def model_files(marker: dict) -> dict[str, str]:
             del raw["from"]
         by_type[home][rel_name] = raw
     for type, spec in (marker.get("nodes") or {}).items():
-        data = dict(spec or {})
+        spec = dict(spec or {})
+        # built-in fields first, so a file shows that a node has a name even with no facts
+        data: dict[str, Any] = {"description": spec.pop("description", ""), "name": spec.pop("name", None) or DEFAULT_NAME}
+        data.update(spec)
         if by_type[type]:
             data["edges"] = by_type[type]
         files[f"{MODEL_DIR}/{type}.yaml"] = _yaml(data)

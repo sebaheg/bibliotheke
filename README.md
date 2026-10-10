@@ -102,6 +102,7 @@ The same model can live in a `model/` folder instead, one file per node type, so
 ```yaml
 # model/word.yaml
 description: A single word in one language.
+name: The word as written.
 id: "<name>-<lang>"
 facts:
   lang:       {type: enum, values: lang, required: true}
@@ -111,7 +112,7 @@ edges:
   defined_in:    {to: source}
 ```
 
-A new model started with `bib model add node` uses the folder; `bib model split` moves an existing one there. The two forms are never mixed.
+Every node has an `id`, a `name` and `notes` whatever its type, so a type's file always says what its `name:` is, as `body:` says what its Markdown body holds. A new model started with `bib model add node` uses the folder; `bib model split` moves an existing one there. The two forms are never mixed.
 
 Node types are lowercase with hyphens (`part-of-speech`). Fact types are `text`, `int`, `number`, `bool`, `time`, `url`, `file` and `enum`; `int: frequency` is short for `{type: int}`. An enum takes its `values` inline or names a vocabulary. A fact takes one value at a time unless it says `many: true`. Edge `from` and `to` take a type or a list of types, and a `symmetric` edge is stored once, in either direction. Edges can be `required`, and take any number of targets unless they say `many: false`. A placeholder in an `id` template is `name`, a fact key, or an edge whose target id fills it in, so `<pos>` works whether part of speech is a fact or an edge to a `part-of-speech` node.
 

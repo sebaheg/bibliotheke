@@ -107,7 +107,7 @@ def _types(given: Any) -> list[str]:
 
 
 def add_node_type(
-    marker: dict[str, Any], type: str, *, description: str = "", id: str | None = None, body: str = ""
+    marker: dict[str, Any], type: str, *, description: str = "", name: str = "", id: str | None = None, body: str = ""
 ) -> dict[str, Any]:
     """A new node type. On a graph without a model this starts one, and the
     nodes already there are then checked against it."""
@@ -119,6 +119,8 @@ def add_node_type(
     spec: dict[str, Any] = {}
     if description:
         spec["description"] = description
+    if name:
+        spec["name"] = name
     if id:
         spec["id"] = id
     if body:
