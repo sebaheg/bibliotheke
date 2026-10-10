@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import networkx
+import yaml
 
 from bibliotheke import store, timeutil
 from bibliotheke.datamodel import DataModel, ModelError
@@ -76,17 +77,37 @@ class Graph:
     one adjacency lookup rather than a scan of every node."""
 
     def __init__(self, root: Path, source: store.Source | None = None) -> None:
+        source = source or store.WorkingTree(root)
+        self._setup(root, source, store.load_marker(source), store.load_nodes(source))
+
+    @classmethod
+    def from_nodes(
+        cls,
+        nodes: Iterable[Node],
+        *,
+        marker: dict[str, Any] | None = None,
+        texts: dict[str, str] | None = None,
+        root: Path | str = ".",
+    ) -> Graph:
+        """A read-only graph that lives in memory, e.g. one built from a git
+        log. ``marker`` is what ``bibliotheke.yaml`` would hold (a data model,
+        view settings); ``texts`` holds bodies at ``nodes/<type>/<id>.md``;
+        ``root`` names the graph (its last part is shown as the title)."""
+        graph = cls.__new__(cls)
+        source = store.Memory(root=Path(root), texts=dict(texts or {}))
+        graph._setup(source.root, source, marker or {}, {node.id: node for node in nodes})
+        return graph
+
+    def _setup(self, root: Path, source: store.Source, marker: dict[str, Any], nodes: dict[str, Node]) -> None:
         self.root = root
-        self.source: store.Source = source or store.WorkingTree(root)
-        self.model: DataModel | None = DataModel.from_marker(store.load_marker(self.source))
+        self.source = source
+        self.marker = marker  # the parsed bibliotheke.yaml: model, view and globe settings
+        self.model: DataModel | None = DataModel.from_marker(marker)
         self.nodes: dict[str, Node] = {}
         self._g = networkx.MultiDiGraph()
         self._versions: dict[str, list[tuple[Node, Record]]] = {}
         self._pos: dict[str, int] = {}  # node id -> load order, so in_edges keep file order
         self._seq = 0  # keeps the keys of two versions of one edge apart
-        self._build(store.load_nodes(self.source))
-
-    def _build(self, nodes: dict[str, Node]) -> None:
         for node in nodes.values():
             self._put_node(node)
         for node in nodes.values():
@@ -136,6 +157,22 @@ class Graph:
             return cls(path, store.GitTree(path, at_commit) if at_commit else None)
         except ValueError as err:
             raise GraphError(str(err)) from err
+
+    def save_as(self, root: Path | str) -> Graph:
+        """Write this graph as files at ``root`` (a new or empty directory)
+        and return the file-backed graph. For graphs that live in memory."""
+        root = Path(root)
+        if root.exists() and any(root.iterdir()):
+            raise GraphError(f"{root} is not empty")
+        store.init_root(root)
+        marker = {"schema_version": store.SCHEMA_VERSION, **self.marker}
+        (root / store.ROOT_MARKER).write_text(yaml.safe_dump(marker, sort_keys=False, allow_unicode=True))
+        for node in self.nodes.values():
+            store.save_node(root, node)
+            if self.has_body(node):
+                path = store.body_path(root, node)
+                path.write_text(self.body(node.id))
+        return Graph(root)
 
     def _mutable(self) -> None:
         if not self.source.writable:
@@ -373,11 +410,13 @@ class Graph:
     def has_body(self, node: Node) -> bool:
         return self.source.exists(store.body_rel(node))
 
-    def facts(self, node_id: str, at: At = NOW) -> list[Fact]:
-        return [f for f in self.node(node_id).facts if at.sees(f)]
+    def facts(self, node_id: str, at: At | None = NOW) -> list[Fact]:
+        """Facts in view; ``at=None`` gives every version."""
+        return [f for f in self.node(node_id).facts if at is None or at.sees(f)]
 
-    def out_edges(self, node_id: str, at: At = NOW) -> list[Edge]:
-        return [e for e in self.node(node_id).edges if at.sees(e)]
+    def out_edges(self, node_id: str, at: At | None = NOW) -> list[Edge]:
+        """Edges out of a node in view; ``at=None`` gives every version."""
+        return [e for e in self.node(node_id).edges if at is None or at.sees(e)]
 
     def in_edges(self, node_id: str, at: At | None = NOW) -> list[tuple[Node, Edge]]:
         """Edges into a node with the nodes they come from, in file order.
@@ -458,8 +497,9 @@ class Graph:
         """Problems that hand edits can introduce."""
         problems = []
         current: dict[str, int] = {}
+        on_disk = self.source.writable  # file placement only means something in a working tree
         for node in self.nodes.values():
-            if not store.node_path(self.root, node).is_file():
+            if on_disk and not store.node_path(self.root, node).is_file():
                 problems.append(f"{node.id}: file is not at nodes/{node.type}/{node.id}.yaml")
             for record in (*node.facts, *node.edges):
                 if isinstance(record, Edge) and record.to not in self.nodes:
@@ -470,7 +510,7 @@ class Graph:
                 if record.superseded_at is None:
                     current[record.id] = current.get(record.id, 0) + 1
         problems += [f"record id {rid} has {n} current versions" for rid, n in current.items() if n > 1]
-        for path in (self.root / store.NODES_DIR).glob("**/*.md"):
+        for path in (self.root / store.NODES_DIR).glob("**/*.md") if on_disk else ():
             if path.stem not in self.nodes or path != store.body_path(self.root, self.nodes[path.stem]):
                 problems.append(f"{path.relative_to(self.root)}: body has no node")
         if self.model:

@@ -166,6 +166,33 @@ bib diff v1.0 v2.0 --json
 
 `--at-commit` combines with the time filters: `--at-commit v1.0 --valid-at 1960` is what the graph, as it stood at `v1.0`, said about 1960. A graph read from a commit is read-only.
 
+## A repository as a graph
+
+`bib repo` reads a git repository's history and shows it as a graph of its files, directories and authors, drawn like any other graph:
+
+```sh
+bib repo .                              # this repository: a grey tree, files coloured by top-level directory
+bib repo ~/src/linux --since 2.years    # a big one, recent history only
+bib repo . --valid-at 2024-06           # as the repository was then
+bib repo . --save graph/                # keep it as files for the other commands
+```
+
+Every commit becomes edges: `touched` from the author to each file, and `co_changed` between files changed in the same commit, so the number of edges between two nodes is how often they moved together, and `--valid-at` shows the ownership and coupling built up by that time. A file's facts (`path`, `dir`, `ext`, `commits`) run from the commit that created it to the one that deleted it; a rename adds a new `path` version. A commit's author date is valid time and its committer date is knowledge time, which is why a rebased commit shows a gap between the two. Commits touching more than 50 files add `touched` edges but no `co_changed` ones, so a mass reformat does not couple everything to everything.
+
+`imports` edges are the dependencies between files, read from each file's contents at every commit that changed it: an edge opens at the commit that introduced the import and closes at the one that dropped it, so `bib rank --rel imports --directed --valid-at 2024` is the most depended-on files as of 2024. Imports are found by pattern, not by parsing, in Python, JavaScript/TypeScript, Rust and C/C++, and resolved against the files that existed at that commit; anything that is not a file in the repository (standard library, packages) is left out. A renamed file keeps its node, so its dependencies carry over. `--no-imports` skips reading contents.
+
+The view has five lenses, each answering a different question; the number keys and `tab` switch between them, and `--lens` picks the first:
+
+1. **Structure**: the directory tree, with what imports what drawn across it. Every directory holds its files on a small sphere around itself and its sub-directories on the side facing away from its parent, each given room for its whole subtree, so the shape radiates from the root, nothing overlaps, and nothing ever moves.
+2. **Map**: the same relations as a force layout, where clusters find their own place.
+3. **Dependencies**: files alone, held together only by `imports`.
+4. **Coupling**: files that changed in the same commit at least three times, however far apart they live in the tree.
+5. **People**: who has touched which files.
+
+All of them draw directories as a quiet grey skeleton and files as the coloured content: the six largest top-level directories get a hue each, the rest share one grey, `imports` edges are light so dependencies read apart from the tree, and a file is sized by how many files import it, which is also what earns it a label. `--rel` makes a lens of your own from any relations (`--layout force` for a simulation even when `contains` is drawn) and `--color-by ext` colours by file type instead.
+
+The graph lives in memory unless you `--save` it; saved, it is an ordinary bibliotheke graph with a data model, so `bib rank --rel co_changed`, `bib path`, `bib communities` and `bib export` all work on it. The scanner is a separate package, `bibliotheke.repo`, that only uses the public API.
+
 ## Graph view
 
 `bib view` opens a 3D force-directed graph drawn with [plotui](https://pypi.org/project/plotui/). Drag to rotate, scroll to zoom, hover a node to light up its neighbourhood, click a node or edge to inspect it. It takes the same time filters as the read commands. It needs a terminal with the Kitty graphics protocol (Ghostty, Kitty, iTerm2 3.5+, WezTerm).
@@ -184,6 +211,10 @@ view:
 ```
 
 Click a legend row to hide that category, click again to bring it back.
+
+`bib view --tree contains` (or `tree: contains` under `view:` in `bibliotheke.yaml`) lays any graph with a hierarchy out as a still tree instead of a force simulation; see the repository view below for what that looks like.
+
+When the graph has dated records, a time bar runs under the plot. Drag it, or step with `,` and `.` (`<` and `>` jump), or press `space` to play the whole span: nodes appear and disappear as their facts and edges come into and go out of validity, and edges that are not valid at that time fade into the canvas. The layout is computed once over everything that ever was, so nothing moves while you scrub; a `--valid-at` on the command line sets where the bar starts.
 
 ## Globe view
 

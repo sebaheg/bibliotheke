@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Protocol
 
@@ -118,6 +118,33 @@ class GitTree:
 
     def files(self, prefix: str, suffix: str) -> list[str]:
         return _in_path_order(rel for rel in self._blobs if rel.startswith(prefix) and rel.endswith(suffix))
+
+
+@dataclass
+class Memory:
+    """A graph that lives only in memory, e.g. one built from a git log.
+    ``texts`` maps relative paths (bodies, mostly) to their contents.
+    Nothing is written back."""
+
+    root: Path = Path(".")
+    texts: dict[str, str] = field(default_factory=dict)
+    writable: bool = False
+    rev: str = "memory"
+
+    def read_text(self, rel: str) -> str:
+        try:
+            return self.texts[rel]
+        except KeyError:
+            raise FileNotFoundError(rel) from None
+
+    def read_many(self, rels: Iterable[str]) -> dict[str, str]:
+        return {rel: self.read_text(rel) for rel in rels}
+
+    def exists(self, rel: str) -> bool:
+        return rel in self.texts
+
+    def files(self, prefix: str, suffix: str) -> list[str]:
+        return _in_path_order(rel for rel in self.texts if rel.startswith(prefix) and rel.endswith(suffix))
 
 
 def _in_path_order(rels: Iterable[str]) -> list[str]:

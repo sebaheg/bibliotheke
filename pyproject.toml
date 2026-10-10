@@ -24,3 +24,8 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+# plotui features bibliotheke uses (globe, legend toggles, graph styles) are not
+# released yet; build from the sibling checkout until plotui 0.7 is on PyPI.
+[tool.uv.sources]
+plotui = { path = "../plotui" }

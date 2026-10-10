@@ -26,6 +26,12 @@ app = typer.Typer(
 add_app = typer.Typer(help="Add a node, a fact or an edge.", no_args_is_help=True)
 app.add_typer(add_app, name="add")
 
+# The repository scanner lives in its own package and only uses the public API;
+# this is the one place the rest of bibliotheke refers to it.
+from bibliotheke.repo.cli import repo  # noqa: E402
+
+app.command("repo")(repo)
+
 out = Console()
 err = Console(stderr=True)
 
@@ -53,6 +59,12 @@ AtCommit = Annotated[
 
 def _open(root: Path | None, at_commit: str | None = None) -> Graph:
     return Graph.open(root, at_commit=at_commit)
+
+
+def _settings(graph: Graph, section: str) -> dict[str, Any]:
+    """An optional display section of bibliotheke.yaml (``view:``, ``globe:``)."""
+    settings = graph.marker.get(section) or {}
+    return settings if isinstance(settings, dict) else {}
 
 
 def _at(valid_at: str | None, known_at: str | None, changed_at: str | None) -> At:
@@ -560,6 +572,11 @@ def view(
         Optional[str], typer.Option("--color-by", help="Colour nodes by 'type', a fact key, or an edge (a node takes its target's colour).")
     ] = None,
     theme: Annotated[Optional[str], typer.Option("--theme", help="'map' (default) or 'classic'.")] = None,
+    rels: Rels = None,
+    tree: Annotated[
+        Optional[str],
+        typer.Option("--tree", help="A hierarchy relation (e.g. contains): lay the graph out as a still tree instead of a force simulation."),
+    ] = None,
     valid_at: ValidAt = None,
     known_at: KnownAt = None,
     changed_at: ChangedAt = None,
@@ -574,13 +591,13 @@ def view(
     from bibliotheke.view import GraphView, theme_for
 
     graph = _open(root)
-    settings = store.view_settings(graph.root, "view")
+    settings = _settings(graph, "view")
     try:
         chosen = theme_for(theme or settings.get("theme") or "map", settings.get("colors"), settings.get("labels"))
     except ValueError as error:
         raise GraphError(str(error)) from error
     at = _at(valid_at, known_at, changed_at)
-    GraphView(graph, at, color_by or settings.get("color_by") or "type", chosen).run()
+    GraphView(graph, at, color_by or settings.get("color_by") or "type", chosen, rels, tree=tree or settings.get("tree")).run()
 
 
 @app.command()
@@ -609,7 +626,7 @@ def globe(
     from bibliotheke.geo import VIA, WHO
 
     graph = _open(root)
-    settings = store.view_settings(graph.root, "globe")
+    settings = _settings(graph, "globe")
     kinds = tuple(t.strip() for t in (who or ",".join(settings.get("who") or WHO)).split(",") if t.strip())
     via = tuple(settings.get("via") or VIA)
     at = _at(valid_at, known_at, changed_at)
