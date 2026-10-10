@@ -50,9 +50,18 @@ def test_add_show_update_history(root):
 
 def test_list_search_check(root):
     listed = json.loads(run(root, "list", "--json", "--type", "person"))
-    assert listed == [{"id": "anna-berg", "type": "person", "name": "Anna Berg"}]
+    assert listed == [{"id": "anna-berg", "type": "person", "name": "Anna Berg", "valid_from": None, "valid_to": None}]
+    run(root, "add", "edge", "anna-berg", "works_at", "deepmind", "--valid-from", "2019", "--valid-to", "2022")
+    run(root, "add", "node", "person", "Bo Ek")
+    run(root, "add", "fact", "bo-ek", "field", "ai", "--valid-from", "2010")
+    listed = json.loads(run(root, "list", "--json", "--type", "person"))
+    assert [(n["id"], n["valid_from"], n["valid_to"]) for n in listed] == [("anna-berg", "2019", "2022"), ("bo-ek", "2010", None)]
+    assert json.loads(run(root, "list", "--json", "--type", "organisation"))[0]["valid_from"] == "2019"  # from the edge in
+    by_time = run(root, "list", "--sort", "valid").splitlines()
+    assert [line.split()[0] for line in by_time[1:]] == ["bo-ek", "anna-berg", "deepmind"]
+    assert "2010 → …" in by_time[1] and "2019 → 2022" in by_time[2]
     assert "deepmind" in run(root, "search", "deep")
-    assert run(root, "check") == "OK: 2 nodes"
+    assert run(root, "check").endswith("OK: 3 nodes")
 
 
 def test_unknown_node_is_a_graph_error(root):
@@ -115,3 +124,44 @@ def test_path_rank_communities(root):
     groups = json.loads(run(root, "communities", "--json"))
     assert groups[0]["size"] == 3 and sorted(groups[0]["members"]) == ["anna-berg", "bo-ek", "deepmind"]
     assert run(root, "communities").splitlines()[1].split()[:2] == ["0", "3"]
+
+
+def test_event_types_show_a_date_not_a_span(tmp_path):
+    (tmp_path / "bibliotheke.yaml").write_text(
+        "schema_version: 1\nnodes:\n  paper: {time: event, facts: {year: int}}\n  person: {facts: {field: text}}\n"
+    )
+    (tmp_path / "nodes").mkdir()
+    run(tmp_path, "add", "node", "paper", "On Time", "--id", "on-time")
+    run(tmp_path, "add", "fact", "on-time", "year", "2025", "--valid-from", "2025-05-29")
+    run(tmp_path, "add", "node", "person", "Anna Berg")
+    run(tmp_path, "add", "fact", "anna-berg", "field", "ai", "--valid-from", "2010")
+    listed = run(tmp_path, "list")
+    assert "2025-05-29" in listed and "2025-05-29 →" not in listed, listed
+    assert "2010 → …" in listed
+    shown = run(tmp_path, "show", "on-time")
+    assert "2025-05-29" in shown and "→" not in shown
+    assert "2010 → …" in run(tmp_path, "show", "anna-berg")
+
+
+def test_model_check_is_check(root):
+    assert run(root, "model", "check") == run(root, "check")
+    assert run(root, "check").endswith("OK: 2 nodes")
+
+
+def test_check_breaks_down_by_type(root):
+    runner.invoke(app, ["model", "add", "node", "person", "--root", str(root)])  # starts a model; deepmind breaks it until
+    run(root, "model", "add", "node", "organisation")  # its type is declared too
+    run(root, "model", "add", "node", "award")  # declared, no nodes yet
+    added = runner.invoke(app, ["model", "add", "fact", "person", "field", "text", "--required", "--root", str(root)])
+    assert added.exit_code == 1  # the model is written, and the data now breaks it
+    output = runner.invoke(app, ["check", "--root", str(root)]).output
+    assert "anna-berg: missing required fact 'field'" in output
+    assert "1 problem in 1 of 2 nodes" in output
+    data = json.loads(runner.invoke(app, ["check", "--json", "--root", str(root)]).output)
+    assert not data["ok"] and data["nodes"] == 2
+    assert [(t["type"], t["nodes"], t["ok"], t["problems"]) for t in data["types"]] == [
+        ("award", 0, 0, 0), ("organisation", 1, 1, 0), ("person", 1, 0, 1)
+    ]
+    run(root, "add", "fact", "anna-berg", "field", "ai")
+    data = json.loads(run(root, "check", "--json"))
+    assert data["ok"] and data["types"][2]["facts"] == 1

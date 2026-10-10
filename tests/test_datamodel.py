@@ -205,3 +205,24 @@ def test_id_placeholder_must_exist(tmp_path):
     (tmp_path / "bibliotheke.yaml").write_text('nodes: {word: {id: "<name>-<pos>"}}')
     with pytest.raises(GraphError, match="<pos> is not name, a fact or an edge of word"):
         Graph.open(tmp_path)
+
+
+def test_event_types_sit_in_time_differently(tmp_path):
+    (tmp_path / "bibliotheke.yaml").write_text(
+        "schema_version: 1\nnodes:\n  paper: {time: event}\n  person: {}\n  job: {time: interval}\n"
+    )
+    (tmp_path / "nodes").mkdir()
+    g = Graph.open(tmp_path)
+    assert g.model.nodes["paper"].event and not g.model.nodes["person"].event and not g.model.nodes["job"].event
+    assert g.model.to_dict()["nodes"]["paper"]["time"] == "event"
+    (tmp_path / "bibliotheke.yaml").write_text("schema_version: 1\nnodes:\n  paper: {time: sometimes}\n")
+    with pytest.raises(GraphError, match="nodes.paper.time must be one of interval, event"):
+        Graph.open(tmp_path)
+    # The CLI can declare one, and shows the kind.
+    runner = CliRunner()
+    assert runner.invoke(app, ["model", "add", "node", "talk", "--event", "--root", str(tmp_path / "other")]).exit_code != 0  # no graph there
+    (tmp_path / "bibliotheke.yaml").write_text("schema_version: 1\n")
+    result = runner.invoke(app, ["model", "add", "node", "talk", "--event", "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert Graph.open(tmp_path).model.nodes["talk"].event
+    assert "time: event" in runner.invoke(app, ["model", "--root", str(tmp_path)]).output

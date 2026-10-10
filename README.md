@@ -33,7 +33,7 @@ bib retract e1a2b3c                   # hides it from the current graph
 bib history geoffrey-hinton           # every version, including superseded ones
 ```
 
-Other commands: `bib list`, `bib search <text>`, `bib check`, `bib model`, `bib import`, `bib export`, `bib path`, `bib rank`, `bib communities`, `bib diff`. The read commands take `--valid-at`, `--known-at` and `--changed-at`, alone or combined, and `--at-commit <rev>` to read the graph as it was in a git commit. Time values are `YYYY`, `YYYY-MM`, `YYYY-MM-DD` or an ISO timestamp; `--valid-to 2023` means through the end of 2023.
+On a graph you do not know, start with `bib types` (each node type, how many nodes, what the model says it is), then `bib browse`: a prompt that lists types, a type's nodes, a node's facts and edges, each step printed and left in the terminal; a number follows an edge, `..` goes back. `bib show` prints the ids at the far end of every edge, so the same walk works one command at a time. Everything prints and exits; only `bib view`, `bib globe` and `bib browse --tui` open a full-screen view. Other commands: `bib list`, `bib search <text>`, `bib check`, `bib model`, `bib import`, `bib fetch <url>`, `bib export`, `bib path`, `bib rank`, `bib communities`, `bib diff`. The read commands take `--valid-at`, `--known-at` and `--changed-at`, alone or combined, and `--at-commit <rev>` to read the graph as it was in a git commit. Time values are `YYYY`, `YYYY-MM`, `YYYY-MM-DD` or an ISO timestamp; `--valid-to 2023` means through the end of 2023.
 
 ## Files
 
@@ -116,7 +116,9 @@ Every node has an `id`, a `name` and `notes` whatever its type, so a type's file
 
 Node types are lowercase with hyphens (`part-of-speech`). Fact types are `text`, `int`, `number`, `bool`, `time`, `url`, `file` and `enum`; `int: frequency` is short for `{type: int}`. An enum takes its `values` inline or names a vocabulary. A fact takes one value at a time unless it says `many: true`. Edge `from` and `to` take a type or a list of types, and a `symmetric` edge is stored once, in either direction. Edges can be `required`, and take any number of targets unless they say `many: false`. A placeholder in an `id` template is `name`, a fact key, or an edge whose target id fills it in, so `<pos>` works whether part of speech is a fact or an edge to a `part-of-speech` node.
 
-With a model in place, `bib add`, `bib update` and `bib import` refuse anything it does not allow (unknown types, keys and edges, bad values, a second value for a single-valued fact or a second target for a single-target edge), and `bib import` fills in ids from the `id` template. `bib check` reports hand edits that break it, as well as missing required facts and edges, and ids that do not follow the template. `bib model` prints the model, and `bib model --json` gives it to agents. Without a `nodes:` section, a graph accepts anything.
+A node type sits in valid time in one of two ways. By default it is an **interval**: a job, a membership, a file in a repository, with `valid_from` and `valid_to`. A type with `time: event` (or `bib model add node paper --event`) **happens at an instant**: a paper is published, a claim is made, and it is there from then on. Its records carry `valid_from` as *when* and no `valid_to`; `--valid-at` treats both kinds the same, but an event shows as a date (`2025-05-29`) rather than a span (`2025-05-29 → …`).
+
+With a model in place, `bib add`, `bib update` and `bib import` refuse anything it does not allow (unknown types, keys and edges, bad values, a second value for a single-valued fact or a second target for a single-target edge), and `bib import` fills in ids from the `id` template. `bib check` (or `bib model check`, the same command from the model's side) reports hand edits that break it, as well as missing required facts and edges, and ids that do not follow the template. It prints one row per node type, those the model declares included, with how many nodes, facts and edges it has and how many nodes are consistent with the model, then every problem, then the verdict; `--json` gives the same to agents. `bib model` prints the model, and `bib model --json` gives it to agents. Without a `nodes:` section, a graph accepts anything.
 
 ### Changing the model
 
@@ -192,6 +194,31 @@ edges:
 ```sh
 bib export --type paper --columns name,year,>authored_by,<cites --sort=-year > CATALOG.md
 ```
+
+## Fetching sources
+
+`bib fetch <url>` brings a source into the graph: one node, the files behind it under `sources/<kind>/`, and the people it names. Four kinds are known, each by its URL:
+
+| Source | Node type | Files | Neighbours |
+|---|---|---|---|
+| YouTube video | `video` | the transcript: a timestamp and link per paragraph, chapters as headings | |
+| arXiv paper | `paper` | the PDF, and its text as Markdown | authors, `authored_by` |
+| GitHub repository | `repository` | a digest: README and the file tree | the owner, `owned_by` |
+| any other page | `article` | the page's text as Markdown | |
+
+The node's `file` fact names what to read, so an agent's job is the same whatever the kind: read the file, write the claims as a batch, `bib import` it. A transcript paragraph opens with `[12:30](https://youtu.be/ID?t=750)`, so a claim can carry the moment it was said.
+
+```sh
+bib model add source youtube            # the video type and its facts; also arxiv, github and web
+bib fetch https://www.youtube.com/watch?v=aircAruvnKk
+bib fetch https://arxiv.org/abs/2505.22954
+bib fetch https://github.com/jennyzzt/dgm
+bib fetch https://sakana.ai/dgm/ --dry-run     # the batch it would import, nothing written
+```
+
+The publish date is the node's valid time and the fetch is its knowledge time. Fetching a URL again finds the node through the source's own id (`youtube_id`, `arxiv`, `github`, `url`) and gives the facts that changed a new version, so stars and views become a history. With a model, facts, neighbours and edges the model has no place for are dropped and reported rather than refused, so a fetch fits a model that names fewer things than the source knows; `--type` picks another node type and `--id` another id. Each fetch also prints the YouTube, arXiv and GitHub links the source mentions: what to fetch next.
+
+Captions come from YouTube through yt-dlp (`pip install 'bibliotheke[fetch]'`), uploaded ones before automatic ones, in the `--lang` language. `--transcribe whisper` downloads the audio and runs Whisper locally instead (mlx-whisper on Apple silicon, or faster-whisper), which the default, `auto`, also does when there are no captions. A paper's text comes from arXiv's HTML rendering, or for older papers from the PDF through PyMuPDF, in the same extra. GitHub needs no token for public repositories; `GITHUB_TOKEN` raises the rate limit. The fetcher is its own package, `bibliotheke.fetch`, on the public API like the repository scanner, and one module per kind, so a new kind is one module that claims its URLs and returns a node, files and neighbours.
 
 ## Graph analysis
 
@@ -296,6 +323,10 @@ uv run bib view --root examples/people --color-by field
 uv run bib view --root examples/people --color-by field --valid-at 1960
 uv run python examples/build_people.py    # rebuild it from scratch
 ```
+
+## Colours
+
+`bib` prints its green, red and yellow as hex, not as the terminal's named colours, so `Data OK` is the same green everywhere rather than whatever a stock Ghostty or iTerm2 maps "green" to. It asks the terminal for its background once and darkens the three colours on a light one; `BIB_BACKGROUND=light` or `dark` overrides that, `COLORFGBG` is the fallback, and `NO_COLOR` turns colour off as usual.
 
 ## Development
 

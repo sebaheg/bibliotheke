@@ -415,6 +415,21 @@ class Graph:
         """Facts in view; ``at=None`` gives every version."""
         return [f for f in self.node(node_id).facts if at is None or at.sees(f)]
 
+    def span(self, node_id: str, at: At | None = NOW) -> tuple[str | None, str | None]:
+        """When the node is in the world, from its records in view: the
+        earliest ``valid_from`` and the latest ``valid_to`` across its facts
+        and the edges at either end, ``None`` for open. A paper's span starts
+        at its publication date; a file's runs from creation to deletion."""
+        records = [*self.facts(node_id, at), *self.out_edges(node_id, at), *(e for _, e in self.in_edges(node_id, at))]
+        starts = [r.valid_from for r in records if r.valid_from]
+        if not starts and not any(r.valid_to for r in records):
+            return None, None
+        start = min(starts, key=timeutil.start) if starts else None
+        if any(r.valid_to is None for r in records):
+            return start, None
+        ends = [r.valid_to for r in records if r.valid_to]
+        return start, (max(ends, key=timeutil.end) if ends else None)
+
     def out_edges(self, node_id: str, at: At | None = NOW) -> list[Edge]:
         """Edges out of a node in view; ``at=None`` gives every version."""
         return [e for e in self.node(node_id).edges if at is None or at.sees(e)]

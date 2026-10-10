@@ -40,6 +40,7 @@ from bibliotheke import timeutil
 from bibliotheke.model import Edge, Fact, Node, Record
 
 FACT_TYPES = ("text", "int", "number", "bool", "time", "url", "file", "enum")
+NODE_TIMES = ("interval", "event")  # how a node type sits in valid time; see NodeSpec
 DEFAULT_NAME = "Display name."  # what a type's `name:` says unless the model says more
 TIME_MODES = ("tracked", "ignored")
 
@@ -73,6 +74,17 @@ class NodeSpec:
     id: str | None = None
     body: str = ""
     facts: dict[str, FactSpec] | None = None
+    # How a node of this type sits in valid time. An ``interval`` holds for a
+    # period (a job, a file in a repository: ``valid_from`` → ``valid_to``).
+    # An ``event`` happens at an instant and is there from then on (a paper
+    # from its publication, a claim from the paper that made it): its
+    # ``valid_from`` is *when*, it has no ``valid_to``, and it is shown as a
+    # date, not a span. Both read the same under ``--valid-at``.
+    time: str = "interval"
+
+    @property
+    def event(self) -> bool:
+        return self.time == "event"
 
 
 @dataclass(frozen=True)
@@ -280,6 +292,7 @@ class DataModel:
                     "name": spec.name,
                     "id": spec.id,
                     "body": spec.body,
+                    "time": spec.time,
                     "facts": {key: fact(f) for key, f in (spec.facts or {}).items()},
                 }
                 for type, spec in self.nodes.items()
@@ -343,6 +356,9 @@ def _node_spec(type: str, raw: Any, vocabularies: dict[str, tuple[str, ...]]) ->
             vocabulary=vocabulary,
             description=str(given.get("description") or ""),
         )
+    time = str(raw.get("time") or "interval")
+    if time not in NODE_TIMES:
+        raise ModelError(f"bibliotheke.yaml: nodes.{type}.time must be one of {', '.join(NODE_TIMES)}, not {time!r}")
     return NodeSpec(
         type=type,
         description=str(raw.get("description") or "").strip(),
@@ -350,6 +366,7 @@ def _node_spec(type: str, raw: Any, vocabularies: dict[str, tuple[str, ...]]) ->
         id=str(raw["id"]) if raw.get("id") else None,
         body=str(raw.get("body") or "").strip(),
         facts=facts,
+        time=time,
     )
 
 

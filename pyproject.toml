@@ -11,6 +11,12 @@ dependencies = [
     "typer>=0.12",
 ]
 
+[project.optional-dependencies]
+# `bib fetch`: yt-dlp reads YouTube metadata and captions, PyMuPDF reads the
+# text of arXiv PDFs that have no HTML rendering. Whisper is left to the user
+# (mlx-whisper on Apple silicon, or faster-whisper) for --transcribe whisper.
+fetch = ["yt-dlp>=2025.1.1", "pymupdf>=1.24"]
+
 [project.scripts]
 bibliotheke = "bibliotheke.cli:main"
 bib = "bibliotheke.cli:main"

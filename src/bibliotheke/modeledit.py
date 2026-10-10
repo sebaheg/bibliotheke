@@ -107,10 +107,19 @@ def _types(given: Any) -> list[str]:
 
 
 def add_node_type(
-    marker: dict[str, Any], type: str, *, description: str = "", name: str = "", id: str | None = None, body: str = ""
+    marker: dict[str, Any],
+    type: str,
+    *,
+    description: str = "",
+    name: str = "",
+    id: str | None = None,
+    body: str = "",
+    event: bool = False,
 ) -> dict[str, Any]:
     """A new node type. On a graph without a model this starts one, and the
-    nodes already there are then checked against it."""
+    nodes already there are then checked against it. ``event`` marks a type
+    whose nodes happen at an instant (a paper, a claim) rather than holding
+    for a period."""
     marker = copy.deepcopy(marker)
     if marker.get("nodes") is None:
         marker["nodes"] = {}
@@ -125,6 +134,8 @@ def add_node_type(
         spec["id"] = id
     if body:
         spec["body"] = body
+    if event:
+        spec["time"] = "event"
     marker["nodes"][type] = spec
     return _checked(marker)
 

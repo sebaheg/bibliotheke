@@ -18,11 +18,13 @@ from rich.console import Console
 from rich.table import Table
 
 from bibliotheke import analysis
+from bibliotheke import palette
 from bibliotheke import gitops
 from bibliotheke import modeledit
 from bibliotheke import diff as differ
 from bibliotheke import export as exporter
 from bibliotheke import store
+from bibliotheke import timeutil
 from bibliotheke.datamodel import DataModel, ModelError
 from bibliotheke.graph import At, Graph, GraphError
 from bibliotheke.model import Node, Record
@@ -54,8 +56,18 @@ from bibliotheke.repo.cli import repo  # noqa: E402
 
 app.command("repo")(repo)
 
-out = Console()
-err = Console(stderr=True)
+# So does the fetcher: `bib fetch <url>` and the model a source kind needs.
+from bibliotheke import fetch as fetcher  # noqa: E402
+from bibliotheke.fetch.cli import fetch  # noqa: E402
+
+app.command("fetch")(fetch)
+
+# Colours are hex from one palette, picked for the terminal's background, so
+# "Data OK" is the same green in every terminal (a named "green" is whatever
+# the terminal's own palette says, olive in a stock Ghostty).
+_theme = palette.theme()
+out = Console(theme=_theme)
+err = Console(stderr=True, theme=_theme)
 
 Root = Annotated[
     Optional[Path],
@@ -100,9 +112,13 @@ def _echo_json(data: Any) -> None:
     typer.echo(json.dumps(data, indent=2, ensure_ascii=False))
 
 
-def _span(record: Record) -> str:
+def _span(record: Record, event: bool = False) -> str:
+    """A record's valid time for a table: a range, or for a record of an
+    event type just when (nothing after it)."""
     if not record.valid_from and not record.valid_to:
         return "always"
+    if event and not record.valid_to:
+        return record.valid_from or "always"
     return f"{record.valid_from or '…'} → {record.valid_to or '…'}"
 
 
@@ -120,8 +136,8 @@ def _record_table(title: str, columns: list[str], history: bool) -> Table:
     return table
 
 
-def _row(record: Record, cells: list[str], history: bool) -> list[str]:
-    row = [record.id, *cells, _span(record), _short(record.known_at), _short(record.changed_at)]
+def _row(record: Record, cells: list[str], history: bool, event: bool = False) -> list[str]:
+    row = [record.id, *cells, _span(record, event), _short(record.known_at), _short(record.changed_at)]
     if history:
         row.append(_short(record.superseded_at or ""))
     return row
@@ -150,7 +166,8 @@ def _print_node(graph: Graph, node: Node, at: At | None) -> None:
         out.print(node.notes.rstrip())
     if data["body"]:
         out.print(f"[dim]Body: {data['body']}[/dim]")
-    name = lambda node_id: graph.nodes[node_id].name if node_id in graph.nodes else node_id  # noqa: E731
+    # The other end's name, with its id so the reader can `bib show` it next.
+    name = lambda node_id: f"{graph.nodes[node_id].name} [dim]{node_id}[/dim]" if node_id in graph.nodes else node_id  # noqa: E731
     sections = (
         ("Facts", ["key", "value"], node.facts, lambda f: [f.key, str(f.value)]),
         ("Edges out", ["rel", "to"], node.edges, lambda e: [e.rel, name(e.to)]),
@@ -160,27 +177,60 @@ def _print_node(graph: Graph, node: Node, at: At | None) -> None:
         if visible:
             table = _record_table(title, columns, history)
             for record in visible:
-                table.add_row(*_row(record, cells(record), history), style="dim" if record.superseded_at else None)
+                table.add_row(*_row(record, cells(record), history, _is_event(graph, node.type)), style="dim" if record.superseded_at else None)
             out.print()
             out.print(table)
     if data["in_edges"]:
         table = _record_table("Edges in", ["from", "rel"], history)
         for other, edge in graph.in_edges(node.id, at):
-            table.add_row(*_row(edge, [other.name, edge.rel], history), style="dim" if edge.superseded_at else None)
+            # An edge in belongs to the other node, so its kind decides.
+            table.add_row(*_row(edge, [name(other.id), edge.rel], history, _is_event(graph, other.type)), style="dim" if edge.superseded_at else None)
         out.print()
         out.print(table)
 
 
-def _print_nodes(nodes: list[Node], as_json: bool) -> None:
+def _print_nodes(graph: Graph, nodes: list[Node], at: At, as_json: bool, sort: str = "type") -> None:
+    """Nodes with when they are in the world (see ``Graph.span``), sorted by
+    ``type`` (then id), ``name``, ``id`` or ``valid`` (earliest first,
+    undated last)."""
+    spans = {node.id: graph.span(node.id, at) for node in nodes}
     if as_json:
-        _echo_json([{"id": n.id, "type": n.type, "name": n.name} for n in nodes])
+        _echo_json(
+            [{"id": n.id, "type": n.type, "name": n.name, "valid_from": spans[n.id][0], "valid_to": spans[n.id][1]} for n in nodes]
+        )
         return
+    keys = {
+        "type": lambda n: (n.type, n.id),
+        "name": lambda n: n.name.casefold(),
+        "id": lambda n: n.id,
+        "valid": lambda n: (spans[n.id][0] is None, timeutil.start(spans[n.id][0]) if spans[n.id][0] else None, n.id),
+    }
+    if sort not in keys:
+        raise GraphError(f"--sort must be one of {', '.join(keys)}")
     table = Table(box=None, pad_edge=False)
-    for column in ("id", "type", "name"):
+    for column in ("id", "type", "name", "valid"):
         table.add_column(column)
-    for node in sorted(nodes, key=lambda n: (n.type, n.id)):
-        table.add_row(node.id, node.type, node.name)
+    for node in sorted(nodes, key=keys[sort]):
+        table.add_row(node.id, node.type, node.name, f"[dim]{_when(graph, node.type, *spans[node.id])}[/dim]")
     out.print(table)
+
+
+def _is_event(graph: Graph, type: str) -> bool:
+    """Whether the model says nodes of this type happen at an instant."""
+    spec = graph.model.nodes.get(type) if graph.model else None
+    return bool(spec and spec.event)
+
+
+def _when(graph: Graph, type: str, start: str | None, end: str | None) -> str:
+    """A valid span for display: a date for an event type, else a range."""
+    if start is None and end is None:
+        return ""
+    if _is_event(graph, type):
+        return start or ""
+    return f"{start or '…'} → {end or '…'}"
+
+
+Sort = Annotated[str, typer.Option("--sort", help="Order: type (default), name, id or valid (earliest first).")]
 
 
 @app.command()
@@ -298,6 +348,7 @@ def history(
 @app.command("list")
 def list_nodes(
     type: Annotated[Optional[str], typer.Option("--type", help="Only nodes of this type.")] = None,
+    sort: Sort = "type",
     valid_at: ValidAt = None,
     known_at: KnownAt = None,
     changed_at: ChangedAt = None,
@@ -305,13 +356,16 @@ def list_nodes(
     at_commit: AtCommit = None,
     root: Root = None,
 ) -> None:
-    """List nodes."""
-    _print_nodes(_open(root, at_commit).list_nodes(_at(valid_at, known_at, changed_at), type=type), as_json)
+    """List nodes, with when each is in the world (its earliest valid_from
+    and latest valid_to: a paper from its publication date on)."""
+    graph, at = _open(root, at_commit), _at(valid_at, known_at, changed_at)
+    _print_nodes(graph, graph.list_nodes(at, type=type), at, as_json, sort)
 
 
 @app.command()
 def search(
     text: str,
+    sort: Sort = "type",
     valid_at: ValidAt = None,
     known_at: KnownAt = None,
     changed_at: ChangedAt = None,
@@ -320,7 +374,63 @@ def search(
     root: Root = None,
 ) -> None:
     """Find nodes whose name, notes, facts or edges contain the text."""
-    _print_nodes(_open(root, at_commit).search(text, _at(valid_at, known_at, changed_at)), as_json)
+    graph, at = _open(root, at_commit), _at(valid_at, known_at, changed_at)
+    _print_nodes(graph, graph.search(text, at), at, as_json, sort)
+
+
+@app.command()
+def types(
+    valid_at: ValidAt = None,
+    known_at: KnownAt = None,
+    changed_at: ChangedAt = None,
+    as_json: AsJson = False,
+    at_commit: AtCommit = None,
+    root: Root = None,
+) -> None:
+    """What the graph holds: each node type with how many nodes it has and
+    what the model says it is. The place to start on an unfamiliar graph;
+    `bib list --type X` then lists one type, `bib browse` walks them all."""
+    from bibliotheke import browse
+
+    graph = _open(root, at_commit)
+    counts = browse.type_counts(graph, _at(valid_at, known_at, changed_at))
+    if as_json:
+        _echo_json([{"type": t, "nodes": n, "description": browse.type_description(graph, t)} for t, n in counts])
+        return
+    if graph.model and graph.model.description:
+        out.print(graph.model.description.strip())
+        out.print()
+    table = Table(box=None, pad_edge=False)
+    for column in ("type", "nodes", "description"):
+        table.add_column(column, justify="right" if column == "nodes" else "left")
+    for t, n in counts:
+        table.add_row(t, str(n), browse.type_description(graph, t))
+    out.print(table)
+    out.print(f"\n[dim]{sum(n for _, n in counts)} nodes in {len(counts)} types[/dim]")
+
+
+@app.command()
+def browse(
+    tui: Annotated[
+        bool, typer.Option("--tui", help="A full-screen two-pane view (tree of types and nodes, details beside it) instead of the prompt.")
+    ] = False,
+    valid_at: ValidAt = None,
+    known_at: KnownAt = None,
+    changed_at: ChangedAt = None,
+    at_commit: AtCommit = None,
+    root: Root = None,
+) -> None:
+    """Walk the graph at a prompt: the types, then a type's nodes, then a
+    node's facts, edges and body, with every step left in the terminal.
+    A number picks from the last list or follows an edge, /text filters,
+    .. goes back, q quits. `--tui` opens a full-screen view instead."""
+    from bibliotheke.browse import Browser, Walk
+
+    graph, at = _open(root, at_commit), _at(valid_at, known_at, changed_at)
+    if tui:
+        Browser(graph, at).run()
+    else:
+        Walk(graph, at, out).run()
 
 
 @app.command("import")
@@ -544,6 +654,8 @@ def model(ctx: typer.Context, as_json: AsJson = False, at_commit: AtCommit = Non
         out.print()
         out.print(f"[bold]{type}[/bold]  [dim]{spec['description']}[/dim]")
         out.print(f"  name: {spec['name']}")
+        if spec.get("time") == "event":
+            out.print("  time: event  [dim](happens at an instant; valid_from is when)[/dim]")
         if spec["id"]:
             out.print(f"  id: {spec['id']}")
         if spec["body"]:
@@ -596,7 +708,8 @@ def _model_write(root: Path | None, change: Callable[[dict[str, Any]], dict[str,
     except ModelError as error:
         raise GraphError(str(error)) from None
     store.save_model(graph.root, marker, graph.layout or store.FOLDER)
-    out.print(done)
+    if done:
+        out.print(done)
     return _open(graph.root)
 
 
@@ -610,9 +723,9 @@ def _model_report(graph: Graph) -> None:
 
 def _print_problems(problems: list[str]) -> None:
     if not problems:
-        out.print("[green]Data OK[/green]")
+        out.print("[ok]Data OK[/ok]")
         return
-    out.print(f"[red]{len(problems)} problem{'s' if len(problems) != 1 else ''} in the data:[/red]")
+    out.print(f"[bad]{len(problems)} problem{'s' if len(problems) != 1 else ''} in the data:[/bad]")
     for problem in problems:
         err.print(f"  {problem}")
 
@@ -622,14 +735,18 @@ def _print_changes(title: str, changes: list[modeledit.Change]) -> None:
     if not changes:
         out.print("  no change")
         return
-    marks = {modeledit.ADDITIVE: "[green]+[/green]", modeledit.DESTRUCTIVE: "[red]-[/red]", modeledit.NEUTRAL: "[dim]~[/dim]"}
+    # The mark and the kind share a colour: green for what the model gains,
+    # red for what it loses, dim for a change of wording.
+    styles = {modeledit.ADDITIVE: "ok", modeledit.DESTRUCTIVE: "bad", modeledit.NEUTRAL: "dim"}
+    marks = {modeledit.ADDITIVE: "+", modeledit.DESTRUCTIVE: "-", modeledit.NEUTRAL: "~"}
     table = Table(box=None, pad_edge=False, show_header=False)
     for column in ("mark", "where", "what", "kind"):
-        table.add_column(column, style="dim" if column == "kind" else None)
+        table.add_column(column)
     for kind in modeledit.KINDS:
         for change in changes:
             if change.kind == kind:
-                table.add_row(f"  {marks[kind]}", change.where, change.what, kind)
+                style = styles[kind]
+                table.add_row(f"  [{style}]{marks[kind]}[/{style}]", change.where, change.what, f"[{style}]{kind}[/{style}]")
     out.print(table)
 
 
@@ -644,12 +761,16 @@ def model_add_node(
     name: Annotated[str, typer.Option("--name", help="What a node's name is for this type, e.g. 'Full name as printed'.")] = "",
     id: Annotated[Optional[str], typer.Option("--id", help="Id template, e.g. '<name>-<lang>'.")] = None,
     body: Annotated[str, typer.Option("--body", help="What the Markdown body holds.")] = "",
+    event: Annotated[
+        bool,
+        typer.Option("--event", help="Nodes of this type happen at an instant (a paper, a claim): valid_from is when, there is no valid_to."),
+    ] = False,
     root: Root = None,
 ) -> None:
     """Add a node type. On a graph without a model, this starts one."""
     graph = _model_write(
         root,
-        lambda m: modeledit.add_node_type(m, type, description=description, name=name, id=id, body=body),
+        lambda m: modeledit.add_node_type(m, type, description=description, name=name, id=id, body=body, event=event),
         f"Added node type {type}",
     )
     _model_report(graph)
@@ -700,6 +821,24 @@ def model_add_edge(
         ),
         f"Added edge {rel}: {src} {'↔' if symmetric else '→'} {dst}",
     )
+    _model_report(graph)
+
+
+@model_add.command("source")
+def model_add_source(
+    kind: Annotated[str, typer.Argument(help="A source kind `bib fetch` knows: youtube, arxiv, github or web.")],
+    root: Root = None,
+) -> None:
+    """Add the node types, facts and edges that fetching from a source kind uses, e.g. `bib model add source youtube`."""
+    added: list[str] = []
+
+    def change(marker: dict[str, Any]) -> dict[str, Any]:
+        marker, found = fetcher.install_model(marker, kind)
+        added.extend(found)
+        return marker
+
+    graph = _model_write(root, change, "")
+    out.print(f"Added {', '.join(added)}" if added else f"The model already has what a {kind} fetch uses")
     _model_report(graph)
 
 
@@ -995,7 +1134,7 @@ def model_open(
     graph = _open(root)
     url, warnings = model_url(graph.root, _model_target(graph, name))
     for warning in warnings:
-        err.print(f"[yellow]warning:[/yellow] {warning}")
+        err.print(f"[warn]warning:[/warn] {warning}")
     if print_only:
         typer.echo(url)
     else:
@@ -1072,29 +1211,93 @@ def check(
     no_destructive: Annotated[
         bool, typer.Option("--no-destructive", help="With --since: fail on a destructive model change too.")
     ] = False,
+    as_json: AsJson = False,
     root: Root = None,
 ) -> None:
     """Validate the graph files: dangling edges, misplaced files, duplicate records,
     orphaned bodies, `file` facts that name missing files, and anything the data
-    model does not allow. Exits 1 on a problem."""
+    model does not allow. Shows, per node type, how many nodes are consistent
+    with the model. Exits 1 on a problem."""
     graph = _open(root)
     problems = graph.check()
     changes = modeledit.diff_models(_open(root, since).model, graph.model) if since else None
     destructive = any(c.kind == modeledit.DESTRUCTIVE for c in changes or [])
+    rows = _check_breakdown(graph, problems)
     if markdown:
         typer.echo(modeledit.markdown_report(f"Model changes since {since}", changes, problems, len(graph.nodes)), nl=False)
+    elif as_json:
+        _echo_json({
+            "ok": not problems,
+            "nodes": len(graph.nodes),
+            "types": [{"type": t, "nodes": n, "ok": n - bad, "facts": f, "edges": e, "problems": bad} for t, n, f, e, bad in rows],
+            "problems": problems,
+            "changes": [{"where": c.where, "what": c.what, "kind": c.kind} for c in changes] if changes is not None else None,
+        })
     else:
         if changes is not None:
             _print_changes(f"Model changes since {since}", changes)
-        for problem in problems:
-            err.print(problem)
-        if not problems:
-            typer.echo(f"OK: {len(graph.nodes)} nodes")
+        _print_check(graph, rows, problems)
     if no_destructive and destructive:
-        err.print("[red]destructive model change[/red]; set BIB_ALLOW_DESTRUCTIVE=1 to commit it anyway")
+        err.print("[bad]destructive model change[/bad]; set BIB_ALLOW_DESTRUCTIVE=1 to commit it anyway")
         raise typer.Exit(1)
     if problems:
         raise typer.Exit(1)
+
+
+def _check_breakdown(graph: Graph, problems: list[str]) -> list[tuple[str, int, int, int, int]]:
+    """Per node type: nodes, current facts, current edges, and nodes with a
+    problem. A problem names its node as `<id>: ...`; one that names no node
+    (an orphaned body, a duplicate record id) counts under the type ``""``.
+    Types the model declares are listed even with no nodes."""
+    types = sorted({n.type for n in graph.nodes.values()} | set(graph.model.nodes if graph.model else ()))
+    bad_by_type: dict[str, set[str]] = {}
+    other = 0
+    for problem in problems:
+        node_id = problem.split(":", 1)[0]
+        if node_id in graph.nodes:
+            bad_by_type.setdefault(graph.nodes[node_id].type, set()).add(node_id)
+        else:
+            other += 1
+    rows = []
+    for type in types:
+        nodes = [n for n in graph.nodes.values() if n.type == type]
+        facts = sum(1 for n in nodes for f in n.facts if f.superseded_at is None)
+        edges = sum(1 for n in nodes for e in n.edges if e.superseded_at is None)
+        rows.append((type, len(nodes), facts, edges, len(bad_by_type.get(type, ()))))
+    if other:
+        rows.append(("", 0, 0, 0, other))
+    return rows
+
+
+def _print_check(graph: Graph, rows: list[tuple[str, int, int, int, int]], problems: list[str]) -> None:
+    """The breakdown as a table, every problem, then the verdict."""
+    table = Table(box=None, pad_edge=False)
+    for column, justify in (("type", "left"), ("nodes", "right"), ("facts", "right"), ("edges", "right"), ("ok", "right"), ("problems", "right")):
+        table.add_column(column, justify=justify, style="dim" if column in ("facts", "edges") else None)
+    for type, nodes, facts, edges, bad in rows:
+        ok = nodes - bad
+        table.add_row(
+            type or "[dim](files)[/dim]",
+            str(nodes) if type else "",
+            str(facts) if type else "",
+            str(edges) if type else "",
+            f"[ok]{ok}[/ok]" if nodes and ok == nodes else (str(ok) if type else ""),
+            f"[bad]{bad}[/bad]" if bad else "[dim]-[/dim]",
+        )
+    out.print(table)
+    if problems:
+        out.print()
+        for problem in problems:
+            err.print(problem, highlight=False)
+        broken = {p.split(":", 1)[0] for p in problems if p.split(":", 1)[0] in graph.nodes}
+        err.print(f"[bad]{len(problems)} problem{'s' if len(problems) != 1 else ''}[/bad] in {len(broken)} of {len(graph.nodes)} nodes")
+    else:
+        out.print(f"[ok]OK:[/ok] {len(graph.nodes)} nodes", highlight=False)
+
+
+# The same check from the model's side: `bib model check` reads as "is the
+# model consistent with the data", `bib check` as "are the files sound".
+model_app.command("check")(check)
 
 
 @hook_app.command("install")
@@ -1208,5 +1411,5 @@ def main() -> None:
     try:
         app()
     except GraphError as error:
-        err.print(f"[red]error:[/red] {error}")
+        err.print(f"[bad]error:[/bad] {error}")
         raise SystemExit(1) from None
