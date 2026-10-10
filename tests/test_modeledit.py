@@ -78,8 +78,10 @@ def test_add_node_starts_a_model_and_reports_what_breaks(tmp_path):
     result = run(tmp_path, "model", "add", "node", "person", "--description", "A human", ok=False)
     assert result.exit_code == 1
     assert "deepmind: the model has no node type 'organisation'" in result.output
-    assert marker(tmp_path)["nodes"] == {"person": {"description": "A human"}}
+    assert "nodes" not in marker(tmp_path), "a new model starts in the model/ folder"
+    assert yaml.safe_load((tmp_path / "model" / "person.yaml").read_text()) == {"description": "A human"}
     assert "Data OK" in run(tmp_path, "model", "add", "node", "organisation").output
+    assert sorted(p.name for p in (tmp_path / "model").glob("*.yaml")) == ["organisation.yaml", "person.yaml"]
 
 
 def test_add_fact_edge_and_vocabulary(root):
@@ -178,6 +180,8 @@ def test_diff_models_classifies():
     changed["edges"]["translates_to"]["symmetric"] = False
     changed["edges"]["translates_to"]["from"] = ["word", "phrase"]
     changed["nodes"]["phrase"] = {"facts": {"lang": {"type": "enum", "values": "lang", "required": True}}}
+    changed["edges"]["in_phrase"] = {"from": "phrase", "to": "word", "required": True}
+    changed["edges"]["origin"] = {"from": "word", "to": "phrase", "required": True}
     new = DataModel.from_marker(changed)
     changes = {(c.where, c.what): c.kind for c in modeledit.diff_models(old, new)}
     assert changes == {
@@ -189,11 +193,13 @@ def test_diff_models_classifies():
         ("word.example", "now takes one value"): "destructive",
         ("word.pos", "new fact (text)"): "additive",
         ("phrase", "new node type"): "additive",
-        ("phrase.lang", "new fact (enum: en, de), required"): "destructive",
+        ("phrase.lang", "new fact (enum: en, de), required"): "additive",
         ("source", "node type removed"): "destructive",
         ("translates_to", "from types added: phrase"): "additive",
         ("translates_to", "no longer symmetric"): "destructive",
         ("defined_in", "edge removed"): "destructive",
+        ("in_phrase", "new edge (phrase → word), required"): "additive",
+        ("origin", "new edge (word → phrase), required"): "destructive",
     }
     assert modeledit.diff_models(None, new)[0].kind == "destructive"
     assert modeledit.diff_models(old, None)[0].kind == "additive"
@@ -242,3 +248,125 @@ def test_model_still_prints(root):
     result = run(root, "model")
     assert "translates_to" in result.output and "word ↔ word" in result.output
     assert json.loads(run(root, "model", "--json").output)["nodes"]["word"]["facts"]["lang"]["required"] is True
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+@pytest.mark.parametrize(
+    "remote",
+    ["git@github.com:sebaheg/bib-rsi.git", "https://github.com/sebaheg/bib-rsi.git", "ssh://git@github.com/sebaheg/bib-rsi"],
+)
+def test_model_open_prints_the_github_address(tmp_path, remote):
+    git = lambda *a: subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)  # noqa: E731
+    git("init", "-q", "-b", "main", ".")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "T")
+    git("remote", "add", "origin", remote)
+    kg = tmp_path / "knowledge"
+    (kg / "nodes").mkdir(parents=True)
+    (kg / "bibliotheke.yaml").write_text(MODEL)
+    result = run(kg, "model", "open", "--print")
+    assert result.output.splitlines()[-1] == "https://github.com/sebaheg/bib-rsi/blob/main/knowledge/bibliotheke.yaml"
+    assert "uncommitted changes" in result.output and "has not been pushed" in result.output
+    git("add", "-A")
+    git("commit", "-qm", "one")
+    assert "uncommitted" not in run(kg, "model", "open", "--print").output
+
+
+def test_model_open_needs_a_remote(tmp_path):
+    subprocess.run(["git", "init", "-q", "."], cwd=tmp_path, check=True)
+    runner.invoke(app, ["init", str(tmp_path)])
+    assert "no remote named origin" in run(tmp_path, "model", "open", "--print", ok=False).output
+
+
+# -- the model/ folder layout ---------------------------------------------------
+
+
+def files(root):
+    return {p.name: yaml.safe_load(p.read_text()) for p in (root / "model").glob("*.yaml")}
+
+
+def test_split_moves_the_model_into_one_file_per_type(root):
+    before = Graph.open(root).model
+    result = run(root, "model", "split")
+    assert "model/word.yaml" in result.output and "Data OK" in result.output
+    assert marker(root) == {"schema_version": 1, "description": "A multilingual vocabulary.", "time": "ignored", "view": {"color_by": "lang"}}
+    got = files(root)
+    assert set(got) == {"word.yaml", "source.yaml", "vocabularies.yaml"}
+    assert got["vocabularies.yaml"] == {"lang": ["en", "sv"]}
+    assert got["word.yaml"]["edges"] == {
+        "translates_to": {"to": "word", "symmetric": True},  # from: word is implied by the file
+        "defined_in": {"to": "source"},
+    }
+    assert "edges" not in got["source.yaml"]
+    g = Graph.open(root)
+    assert g.layout == "folder" and g.model == before and g.check() == []
+    assert "already in model/" in run(root, "model", "split", ok=False).output
+
+
+def test_folder_layout_edits_write_the_right_files(root):
+    run(root, "model", "split")
+    run(root, "model", "add", "node", "phrase", "--description", "Several words")
+    run(root, "model", "add", "edge", "part_of", "word", "phrase")
+    run(root, "model", "add", "edge", "mentions", "source,phrase", "word")
+    got = files(root)
+    assert got["phrase.yaml"] == {"description": "Several words"}
+    assert got["word.yaml"]["edges"]["part_of"] == {"to": "phrase"}
+    assert got["source.yaml"]["edges"]["mentions"] == {"from": ["source", "phrase"], "to": "word"}, "a multi-source edge keeps from, in its first type's file"
+    assert Graph.open(root).model.edges["mentions"].sources == ("source", "phrase")
+
+    run(root, "model", "rename", "node", "source", "reference")
+    got = files(root)
+    assert "source.yaml" not in got and got["reference.yaml"]["edges"]["mentions"]["from"] == ["reference", "phrase"]
+    assert got["word.yaml"]["edges"]["defined_in"] == {"to": "reference"}
+
+    run(root, "model", "drop", "node", "phrase")
+    got = files(root)
+    assert "phrase.yaml" not in got and "part_of" not in got["word.yaml"]["edges"]
+    assert got["reference.yaml"]["edges"]["mentions"] == {"to": "word"}
+    assert Graph.open(root).check() == []
+
+
+def test_folder_layout_rejects_mixed_and_duplicate_definitions(root):
+    run(root, "model", "split")
+    (root / "model" / "source.yaml").write_text("edges:\n  translates_to: {to: word}\n")
+    with pytest.raises(GraphError, match="also defined in model/source.yaml"):
+        Graph.open(root)
+    (root / "model" / "source.yaml").write_text("{}\n")
+    (root / "bibliotheke.yaml").write_text(marker_text := (root / "bibliotheke.yaml").read_text() + "nodes: {}\n")
+    with pytest.raises(GraphError, match="both here and in model/"):
+        Graph.open(root)
+
+
+def test_folder_layout_edit_and_open(root, monkeypatch):
+    run(root, "model", "split")
+    assert "name the file to edit" in run(root, "model", "edit", ok=False).output
+    edited = {"text": "facts: {url: url, isbn: text}\n"}
+    monkeypatch.setattr(cli, "_edit_text", lambda text: edited["text"])
+    result = run(root, "model", "edit", "source")
+    assert "source.isbn" in result.output and "Saved model/source.yaml" in result.output
+    assert Graph.open(root).model.nodes["source"].facts["isbn"].type == "text"
+    edited["text"] = "facts: {url: url}\nedges: {translates_to: {to: word}}\n"
+    assert "also defined in" in run(root, "model", "edit", "source", ok=False).output
+    assert "no model/nothing.yaml" in run(root, "model", "edit", "nothing", ok=False).output
+
+    git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)  # noqa: E731
+    git("init", "-q", "-b", "main", ".")
+    git("remote", "add", "origin", "git@github.com:sebaheg/bib-rsi.git")
+    assert run(root, "model", "open", "--print").output.splitlines()[-1] == "https://github.com/sebaheg/bib-rsi/tree/main/model/"
+    assert run(root, "model", "open", "word", "--print").output.splitlines()[-1] == "https://github.com/sebaheg/bib-rsi/blob/main/model/word.yaml"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_folder_layout_is_read_from_a_commit(root):
+    git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)  # noqa: E731
+    git("init", "-q", ".")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "T")
+    run(root, "model", "split")
+    git("add", "-A")
+    git("commit", "-qm", "one")
+    run(root, "model", "add", "fact", "word", "frequency", "int")
+    old = Graph.open(root, at_commit="HEAD")
+    assert old.layout == "folder" and "frequency" not in old.model.nodes["word"].facts
+    result = run(root, "model", "diff")
+    assert "word.frequency" in result.output and "Data OK" in result.output

@@ -2,6 +2,14 @@
 is one file at ``nodes/<type>/<id>.yaml``, with optional long-form Markdown
 next to it at ``nodes/<type>/<id>.md``.
 
+The data model lives either in ``bibliotheke.yaml`` itself (``nodes:``,
+``edges:``, ``vocabularies:``) or, so that each node type is one file to
+read on GitHub, in a ``model/`` folder: ``model/<type>.yaml`` holds the
+type's facts and, under ``edges:``, the relations that go out from it, and
+``model/vocabularies.yaml`` holds the shared value lists. The two forms
+are never mixed. ``load_model`` reads either into the same dict; that is what
+a ``Graph.marker`` holds.
+
 A graph is read through a ``Source``: the working tree, or a git revision
 (``GitTree``) read straight from the repository without a checkout."""
 
@@ -11,7 +19,7 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Protocol
+from typing import Any, Iterable, Protocol
 
 import yaml
 
@@ -19,6 +27,10 @@ from bibliotheke.model import Node, TIME_FIELDS
 
 ROOT_MARKER = "bibliotheke.yaml"
 NODES_DIR = "nodes"
+MODEL_DIR = "model"
+VOCABULARIES = "vocabularies"  # model/vocabularies.yaml
+MODEL_KEYS = ("description", "time", "vocabularies", "nodes", "edges")
+FOLDER, FILE = "folder", "file"  # the two layouts a model can have
 SCHEMA_VERSION = 1
 
 
@@ -227,6 +239,120 @@ def load_marker(where: Path | Source) -> dict:
     if not isinstance(marker, dict):
         raise ValueError(f"{source.root / ROOT_MARKER}: must be a mapping")
     return marker
+
+
+def load_model(where: Path | Source) -> tuple[dict, str | None]:
+    """The marker with the model folded in, whichever layout holds it, and
+    the layout: ``"folder"`` for ``model/``, ``"file"`` for a model in
+    ``bibliotheke.yaml``, None when the graph has no model."""
+    source = _source(where)
+    marker = load_marker(source)
+    rels = source.files(f"{MODEL_DIR}/", ".yaml")
+    if not rels:
+        return marker, FILE if marker.get("nodes") is not None else None
+    if any(key in marker for key in ("nodes", "edges", "vocabularies")):
+        raise ValueError(f"{source.root / ROOT_MARKER}: the model is defined both here and in {MODEL_DIR}/; keep one")
+    return assemble_model(marker, source.read_many(rels)), FOLDER
+
+
+def assemble_model(marker: dict, texts: dict[str, str]) -> dict:
+    """The marker with a ``model/`` folder's files (``rel -> contents``) folded
+    into ``vocabularies``, ``nodes`` and ``edges``. Node types come in file
+    order; an edge's ``from`` defaults to the type whose file declares it."""
+    nodes: dict[str, Any] = {}
+    edges: dict[str, Any] = {}
+    homes: dict[str, str] = {}
+    vocabularies: Any = {}
+    for rel in sorted(texts, key=lambda r: r.split("/")):
+        name = rel[len(MODEL_DIR) + 1 : -len(".yaml")]
+        if "/" in name:
+            raise ValueError(f"{rel}: model files go directly in {MODEL_DIR}/")
+        try:
+            data = yaml.safe_load(texts[rel]) or {}
+        except yaml.YAMLError as err:
+            raise ValueError(f"{rel}: {err}") from err
+        if not isinstance(data, dict):
+            raise ValueError(f"{rel}: must be a mapping")
+        if name == VOCABULARIES:
+            vocabularies = data
+            continue
+        nodes[name] = {key: value for key, value in data.items() if key != "edges"}
+        declared = data.get("edges") or {}
+        if not isinstance(declared, dict):
+            raise ValueError(f"{rel}: edges must be a mapping")
+        for rel_name, raw in declared.items():
+            if rel_name in edges:
+                raise ValueError(f"{rel}: edge {rel_name!r} is also defined in {homes[rel_name]}")
+            if isinstance(raw, dict) and "from" not in raw:
+                raw = {"from": name, **raw}
+            edges[str(rel_name)] = raw
+            homes[str(rel_name)] = rel
+    return {**marker, "vocabularies": vocabularies, "nodes": nodes, "edges": edges}
+
+
+def model_files(marker: dict) -> dict[str, str]:
+    """The ``model/`` folder for a marker's model: ``rel -> contents``. An edge
+    goes in the file of its first ``from`` type, and ``from`` is left out
+    when it is only that type."""
+    files: dict[str, str] = {}
+    by_type: dict[str, dict[str, Any]] = {type: {} for type in marker.get("nodes") or {}}
+    for rel_name, raw in (marker.get("edges") or {}).items():
+        raw = dict(raw) if isinstance(raw, dict) else {"from": raw}
+        sources = raw.get("from")
+        sources = [sources] if isinstance(sources, str) else list(sources or [])
+        home = sources[0] if sources and sources[0] in by_type else next(iter(by_type), None)
+        if home is None:
+            continue
+        if sources == [home]:
+            del raw["from"]
+        by_type[home][rel_name] = raw
+    for type, spec in (marker.get("nodes") or {}).items():
+        data = dict(spec or {})
+        if by_type[type]:
+            data["edges"] = by_type[type]
+        files[f"{MODEL_DIR}/{type}.yaml"] = _yaml(data)
+    if marker.get("vocabularies"):
+        files[f"{MODEL_DIR}/{VOCABULARIES}.yaml"] = _yaml(marker["vocabularies"])
+    return files
+
+
+def marker_text(marker: dict, layout: str = FILE) -> str:
+    """``bibliotheke.yaml`` contents: ``schema_version`` first, the model
+    sections in their documented order (left out in the folder layout, where
+    only ``description`` and ``time`` stay), then anything else (``view:``,
+    ``globe:``) as it was. Comments in the file are not kept."""
+    ordered: dict[str, Any] = {"schema_version": marker.get("schema_version", SCHEMA_VERSION)}
+    for key in MODEL_KEYS:
+        if key in marker and not (layout == FOLDER and key in ("vocabularies", "nodes", "edges")):
+            ordered[key] = marker[key].strip() if isinstance(marker[key], str) else marker[key]
+    for key, value in marker.items():
+        if key not in ("vocabularies", "nodes", "edges"):
+            ordered.setdefault(key, value)
+    return _yaml(ordered)
+
+
+def save_model(root: Path, marker: dict, layout: str) -> list[str]:
+    """Write a model in the given layout, removing what the other layout or
+    a dropped type left behind. Returns the files written."""
+    written = [ROOT_MARKER]
+    (root / ROOT_MARKER).write_text(marker_text(marker, layout))
+    folder = root / MODEL_DIR
+    wanted = model_files(marker) if layout == FOLDER else {}
+    for rel, text in wanted.items():
+        folder.mkdir(exist_ok=True)
+        (root / rel).write_text(text)
+        written.append(rel)
+    if folder.is_dir():
+        for path in folder.glob("*.yaml"):
+            if path.relative_to(root).as_posix() not in wanted:
+                path.unlink()
+        if not any(folder.iterdir()):
+            folder.rmdir()
+    return written
+
+
+def _yaml(data: Any) -> str:
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=100, default_flow_style=None)
 
 
 def view_settings(where: Path | Source, section: str = "view") -> dict:

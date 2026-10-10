@@ -97,13 +97,29 @@ edges:
     description: Same meaning in another language.
 ```
 
+The same model can live in a `model/` folder instead, one file per node type, so that the folder listing on GitHub is the overview and each type is one short file to read. A type's file holds its facts and, under `edges:`, the relations that go out from it; `from` is implied by the file and only written when an edge starts from several types. Shared value lists go in `model/vocabularies.yaml`, and `bibliotheke.yaml` keeps `description`, `time` and the view settings:
+
+```yaml
+# model/word.yaml
+description: A single word in one language.
+id: "<name>-<lang>"
+facts:
+  lang:       {type: enum, values: lang, required: true}
+  definition: {type: text, required: true}
+edges:
+  translates_to: {to: word, symmetric: true}
+  defined_in:    {to: source}
+```
+
+A new model started with `bib model add node` uses the folder; `bib model split` moves an existing one there. The two forms are never mixed.
+
 Node types are lowercase with hyphens (`part-of-speech`). Fact types are `text`, `int`, `number`, `bool`, `time`, `url`, `file` and `enum`; `int: frequency` is short for `{type: int}`. An enum takes its `values` inline or names a vocabulary. A fact takes one value at a time unless it says `many: true`. Edge `from` and `to` take a type or a list of types, and a `symmetric` edge is stored once, in either direction. Edges can be `required`, and take any number of targets unless they say `many: false`. A placeholder in an `id` template is `name`, a fact key, or an edge whose target id fills it in, so `<pos>` works whether part of speech is a fact or an edge to a `part-of-speech` node.
 
 With a model in place, `bib add`, `bib update` and `bib import` refuse anything it does not allow (unknown types, keys and edges, bad values, a second value for a single-valued fact or a second target for a single-target edge), and `bib import` fills in ids from the `id` template. `bib check` reports hand edits that break it, as well as missing required facts and edges, and ids that do not follow the template. `bib model` prints the model, and `bib model --json` gives it to agents. Without a `nodes:` section, a graph accepts anything.
 
 ### Changing the model
 
-A model changes as a graph grows. `bib model` has subcommands for that, so a change is one command rather than a YAML edit plus a check, and each one rewrites `bibliotheke.yaml` and then checks the data against the new model:
+A model changes as a graph grows. `bib model` has subcommands for that, so a change is one command rather than a YAML edit plus a check, and each one rewrites the model files and then checks the data against the new model:
 
 ```sh
 bib model add node phrase --description "Several words with one meaning"
@@ -123,12 +139,13 @@ A rename rewrites every version of the records that use the old name, superseded
 For a bigger change, edit the file and let `bib` judge it:
 
 ```sh
-bib model edit                 # opens bibliotheke.yaml in $EDITOR, checks the result before saving
+bib model edit paper           # opens model/paper.yaml in $EDITOR, checks the result before saving
 bib model diff                 # how the model changed since HEAD, and what that breaks
 bib model diff v1 v2 --json    # between two commits, for agents
+bib model open                 # the model/ folder on GitHub, in the browser; `open paper` for one file
 ```
 
-Both classify every change as additive (`+`, nothing that was allowed is refused: a new type, an optional fact, an enum value), destructive (`-`, something that was allowed is now refused: a fact removed, a fact made required, an enum value dropped, a type changed, a template changed) or neutral (`~`, descriptions), then list the current records that break the newer model. `bib model edit` does not save a model that current records break unless you pass `--force`; `bib model diff` exits 1 in that case. Comments in `bibliotheke.yaml` survive `bib model edit` but not the other subcommands, which rewrite the file.
+Both classify every change as additive (`+`, nothing that was allowed is refused: a new type, an optional fact, an enum value), destructive (`-`, something that was allowed is now refused: a fact removed, a fact made required, an enum value dropped, a type changed, a template changed) or neutral (`~`, descriptions), then list the current records that break the newer model. `bib model edit` does not save a model that current records break unless you pass `--force`; `bib model diff` exits 1 in that case. Comments in the model files survive `bib model edit` but not the other subcommands, which rewrite them.
 
 ## Bodies and files
 

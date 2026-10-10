@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import networkx
-import yaml
 
 from bibliotheke import store, timeutil
 from bibliotheke.datamodel import DataModel, ModelError
@@ -78,7 +77,8 @@ class Graph:
 
     def __init__(self, root: Path, source: store.Source | None = None) -> None:
         source = source or store.WorkingTree(root)
-        self._setup(root, source, store.load_marker(source), store.load_nodes(source))
+        marker, layout = store.load_model(source)
+        self._setup(root, source, marker, store.load_nodes(source), layout)
 
     @classmethod
     def from_nodes(
@@ -95,13 +95,15 @@ class Graph:
         ``root`` names the graph (its last part is shown as the title)."""
         graph = cls.__new__(cls)
         source = store.Memory(root=Path(root), texts=dict(texts or {}))
-        graph._setup(source.root, source, marker or {}, {node.id: node for node in nodes})
+        marker = marker or {}
+        graph._setup(source.root, source, marker, {node.id: node for node in nodes}, store.FILE if marker.get("nodes") is not None else None)
         return graph
 
-    def _setup(self, root: Path, source: store.Source, marker: dict[str, Any], nodes: dict[str, Node]) -> None:
+    def _setup(self, root: Path, source: store.Source, marker: dict[str, Any], nodes: dict[str, Node], layout: str | None) -> None:
         self.root = root
         self.source = source
-        self.marker = marker  # the parsed bibliotheke.yaml: model, view and globe settings
+        self.marker = marker  # bibliotheke.yaml with the model folded in: model, view and globe settings
+        self.layout = layout  # where the model lives: store.FOLDER (model/), store.FILE (bibliotheke.yaml) or None
         self.model: DataModel | None = DataModel.from_marker(marker)
         self.nodes: dict[str, Node] = {}
         self._g = networkx.MultiDiGraph()
@@ -165,8 +167,7 @@ class Graph:
         if root.exists() and any(root.iterdir()):
             raise GraphError(f"{root} is not empty")
         store.init_root(root)
-        marker = {"schema_version": store.SCHEMA_VERSION, **self.marker}
-        (root / store.ROOT_MARKER).write_text(yaml.safe_dump(marker, sort_keys=False, allow_unicode=True))
+        store.save_model(root, self.marker, self.layout or store.FILE)
         for node in self.nodes.values():
             store.save_node(root, node)
             if self.has_body(node):

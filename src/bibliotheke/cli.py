@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import tempfile
+import webbrowser
 from pathlib import Path
 from typing import Annotated, Any, Callable, Optional
 
@@ -578,7 +580,8 @@ Description = Annotated[str, typer.Option("--description", help="What this is, f
 
 
 def _model_write(root: Path | None, change: Callable[[dict[str, Any]], dict[str, Any]], done: str) -> Graph:
-    """Apply a change to bibliotheke.yaml, say what was done, and return the
+    """Apply a change to the model, write it in the graph's layout (a new
+    model starts the model/ folder), say what was done, and return the
     reopened graph."""
     graph = _open(root)
     graph._mutable()
@@ -586,7 +589,7 @@ def _model_write(root: Path | None, change: Callable[[dict[str, Any]], dict[str,
         marker = change(graph.marker)
     except ModelError as error:
         raise GraphError(str(error)) from None
-    modeledit.save_marker(graph.root, marker)
+    store.save_model(graph.root, marker, graph.layout or store.FOLDER)
     out.print(done)
     return _open(graph.root)
 
@@ -717,7 +720,7 @@ def model_rename_node(
     except ModelError as error:
         raise GraphError(str(error)) from None
     moved = modeledit.rewrite_node_type(graph.nodes, graph.root, old, new)
-    modeledit.save_marker(graph.root, marker)
+    store.save_model(graph.root, marker, graph.layout or store.FOLDER)
     out.print(f"Renamed node type {old} to {new}; moved {moved} node{'s' if moved != 1 else ''}")
     _model_report(_open(graph.root))
 
@@ -737,7 +740,7 @@ def model_rename_fact(
     except ModelError as error:
         raise GraphError(str(error)) from None
     count = modeledit.rewrite_fact_key(graph.nodes, graph.root, type, old, new)
-    modeledit.save_marker(graph.root, marker)
+    store.save_model(graph.root, marker, graph.layout or store.FOLDER)
     out.print(f"Renamed fact {type}.{old} to {type}.{new} in {count} record{'s' if count != 1 else ''}")
     _model_report(_open(graph.root))
 
@@ -756,7 +759,7 @@ def model_rename_edge(
     except ModelError as error:
         raise GraphError(str(error)) from None
     count = modeledit.rewrite_rel(graph.nodes, graph.root, old, new)
-    modeledit.save_marker(graph.root, marker)
+    store.save_model(graph.root, marker, graph.layout or store.FOLDER)
     out.print(f"Renamed edge {old} to {new} in {count} record{'s' if count != 1 else ''}")
     _model_report(_open(graph.root))
 
@@ -857,28 +860,110 @@ def _edit_text(text: str) -> str:
         path.unlink(missing_ok=True)
 
 
-@model_app.command("edit")
-def model_edit(force: Force = False, root: Root = None) -> None:
-    """Edit bibliotheke.yaml in $EDITOR, with the result checked before it is saved.
+def _git(root: Path, *args: str) -> str | None:
+    done = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False)
+    return done.stdout.strip() if done.returncode == 0 else None
 
-    The edited file is parsed, diffed against the current model and checked
-    against the data. A change that breaks current records is not saved
-    unless --force.
+
+def model_url(root: Path, target: str = store.ROOT_MARKER) -> tuple[str, list[str]]:
+    """The GitHub URL of a path in the graph (``bibliotheke.yaml``, the
+    ``model/`` folder, or one of its files) on the current branch, and
+    warnings when what GitHub shows is not what is on disk."""
+    top = _git(root, "rev-parse", "--show-toplevel", "--show-prefix")
+    if top is None:
+        raise GraphError(f"{root} is not in a git repository")
+    prefix = top.split("\n")[1] if "\n" in top else ""
+    remote = _git(root, "remote", "get-url", "origin")
+    if remote is None:
+        raise GraphError("the repository has no remote named origin; push it to GitHub first")
+    match = re.match(r"^(?:https?://|ssh://)?(?:[\w.-]+@)?(?P<host>[\w.-]+)[:/](?P<path>.+?)(?:\.git)?/?$", remote)
+    if match is None:
+        raise GraphError(f"cannot turn the remote {remote!r} into a web address")
+    branch = _git(root, "symbolic-ref", "--short", "HEAD") or "HEAD"
+    kind = "tree" if target.endswith("/") else "blob"
+    url = f"https://{match['host']}/{match['path']}/{kind}/{branch}/{prefix}{target}"
+    warnings = []
+    if _git(root, "status", "--porcelain", "--", target.rstrip("/")):
+        warnings.append(f"{target} has uncommitted changes; GitHub shows the committed version")
+    ahead = _git(root, "rev-list", "--count", "@{upstream}..HEAD")
+    if ahead is None:
+        warnings.append(f"branch {branch} has not been pushed")
+    elif ahead != "0":
+        warnings.append(f"branch {branch} is {ahead} commit{'s' if ahead != '1' else ''} ahead of its remote")
+    return url, warnings
+
+
+ModelFile = Annotated[
+    Optional[str],
+    typer.Argument(help="In the model/ layout: a node type, or 'vocabularies', for that one file."),
+]
+
+
+def _model_target(graph: Graph, name: str | None) -> str:
+    """The path that holds the model, or one of its files."""
+    if graph.layout != store.FOLDER:
+        if name:
+            raise GraphError(f"the model is in {store.ROOT_MARKER}, not in {store.MODEL_DIR}/; `bib model split` moves it there")
+        return store.ROOT_MARKER
+    if name is None:
+        return f"{store.MODEL_DIR}/"
+    rel = f"{store.MODEL_DIR}/{name}.yaml"
+    if not (graph.root / rel).is_file():
+        known = sorted(p.stem for p in (graph.root / store.MODEL_DIR).glob("*.yaml"))
+        raise GraphError(f"no {rel} (there: {', '.join(known)})")
+    return rel
+
+
+@model_app.command("open")
+def model_open(
+    name: ModelFile = None,
+    print_only: Annotated[bool, typer.Option("--print", help="Print the address instead of opening it.")] = False,
+    root: Root = None,
+) -> None:
+    """Open the model on GitHub, on the current branch: the model/ folder, one of its files, or bibliotheke.yaml."""
+    graph = _open(root)
+    url, warnings = model_url(graph.root, _model_target(graph, name))
+    for warning in warnings:
+        err.print(f"[yellow]warning:[/yellow] {warning}")
+    if print_only:
+        typer.echo(url)
+    else:
+        webbrowser.open(url)
+        out.print(f"Opened {url}")
+
+
+@model_app.command("edit")
+def model_edit(name: ModelFile = None, force: Force = False, root: Root = None) -> None:
+    """Edit the model in $EDITOR, with the result checked before it is saved.
+
+    With the model/ layout, name the file to edit: a node type, or
+    'vocabularies'. The edited file is parsed, diffed against the current
+    model and checked against the data. A change that breaks current
+    records is not saved unless --force.
     """
     graph = _open(root)
     graph._mutable()
-    path = graph.root / store.ROOT_MARKER
+    if graph.layout == store.FOLDER and name is None:
+        known = sorted(p.stem for p in (graph.root / store.MODEL_DIR).glob("*.yaml"))
+        raise GraphError(f"name the file to edit: one of {', '.join(known)}")
+    target = _model_target(graph, name)
+    path = graph.root / target
     before = path.read_text()
     after = _edit_text(before)
     if after is None or after == before:
         out.print("No change")
         return
     try:
-        marker = yaml.safe_load(after)
-        if not isinstance(marker, dict):
-            raise ModelError("must be a mapping")
+        if graph.layout == store.FOLDER:
+            texts = {p.relative_to(graph.root).as_posix(): p.read_text() for p in (graph.root / store.MODEL_DIR).glob("*.yaml")}
+            texts[target] = after
+            marker = store.assemble_model(store.load_marker(graph.root), texts)
+        else:
+            marker = yaml.safe_load(after)
+            if not isinstance(marker, dict):
+                raise ModelError("must be a mapping")
         model = DataModel.from_marker(marker)
-    except (yaml.YAMLError, ModelError) as error:
+    except (yaml.YAMLError, ValueError) as error:  # ModelError is a ValueError
         raise GraphError(f"not saved: {error}") from None
     changes = modeledit.diff_models(graph.model, model)
     problems = model.problems(graph.nodes, graph.root) if model else []
@@ -887,7 +972,24 @@ def model_edit(force: Force = False, root: Root = None) -> None:
     if problems and not force:
         raise GraphError("not saved; fix the data or the model, or pass --force to save anyway")
     path.write_text(after)
-    out.print(f"Saved {store.ROOT_MARKER}")
+    out.print(f"Saved {target}")
+
+
+@model_app.command("split")
+def model_split(root: Root = None) -> None:
+    """Move the model out of bibliotheke.yaml into a model/ folder: one file per
+    node type, with the edges that go out from it, plus vocabularies.yaml."""
+    graph = _open(root)
+    graph._mutable()
+    if graph.layout == store.FOLDER:
+        raise GraphError(f"the model is already in {store.MODEL_DIR}/")
+    if graph.layout is None:
+        raise GraphError("this graph has no data model; `bib model add node <type>` starts one, in model/")
+    written = store.save_model(graph.root, graph.marker, store.FOLDER)
+    for rel in written:
+        out.print(f"  {rel}")
+    out.print(f"Model moved to {store.MODEL_DIR}/ ({len(written) - 1} files); {store.ROOT_MARKER} keeps description, time and view settings")
+    _model_report(_open(graph.root))
 
 
 @app.command()

@@ -1,7 +1,9 @@
 """Changing a data model once data exists.
 
-Three things live here: edits to the ``nodes:``, ``edges:`` and
-``vocabularies:`` sections of ``bibliotheke.yaml`` (add, rename, drop), the
+Three things live here: edits to a model's ``nodes``, ``edges`` and
+``vocabularies`` (add, rename, drop), applied to the dict ``store.load_model``
+gives and written back with ``store.save_model`` in whichever layout the
+graph uses, the
 rewrites of node files that a rename or a drop needs, and the diff between
 two models, each change classified as *additive* (nothing that was allowed
 is refused), *destructive* (something that was allowed is now refused, so
@@ -21,7 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-import yaml
 
 from bibliotheke import store, timeutil
 from bibliotheke.datamodel import FACT_TYPES, DataModel, EdgeSpec, FactSpec, ModelError, NodeSpec
@@ -29,7 +30,6 @@ from bibliotheke.model import Node
 
 ADDITIVE, DESTRUCTIVE, NEUTRAL = "additive", "destructive", "neutral"
 KINDS = (DESTRUCTIVE, ADDITIVE, NEUTRAL)
-MODEL_KEYS = ("description", "time", "vocabularies", "nodes", "edges")
 
 
 @dataclass(frozen=True)
@@ -42,24 +42,7 @@ class Change:
         return {"kind": self.kind, "where": self.where, "what": self.what}
 
 
-# -- bibliotheke.yaml ---------------------------------------------------------
-
-
-def marker_text(marker: dict[str, Any]) -> str:
-    """``bibliotheke.yaml`` contents: ``schema_version`` first, the model
-    sections in their documented order, then anything else (``view:``,
-    ``globe:``) as it was. Comments in the file are not kept."""
-    ordered: dict[str, Any] = {"schema_version": marker.get("schema_version", store.SCHEMA_VERSION)}
-    for key in MODEL_KEYS:
-        if key in marker:
-            ordered[key] = marker[key]
-    for key, value in marker.items():
-        ordered.setdefault(key, value)
-    return yaml.safe_dump(ordered, sort_keys=False, allow_unicode=True, width=100, default_flow_style=None)
-
-
-def save_marker(root: Path, marker: dict[str, Any]) -> None:
-    (root / store.ROOT_MARKER).write_text(marker_text(marker))
+# -- edits to the model dict (whatever layout holds it on disk) ------------
 
 
 def _checked(marker: dict[str, Any]) -> dict[str, Any]:
@@ -413,7 +396,8 @@ def diff_models(old: DataModel | None, new: DataModel | None) -> list[Change]:
     for type in _in_order(old.nodes, new.nodes):
         if type not in old.nodes:
             changes.append(Change(ADDITIVE, type, "new node type"))
-            changes += [c for key, spec in (new.nodes[type].facts or {}).items() for c in _new_fact(f"{type}.{key}", spec)]
+            # nothing of a new type exists yet, so even its required facts break nothing
+            changes += [c for key, spec in (new.nodes[type].facts or {}).items() for c in _new_fact(f"{type}.{key}", spec, fresh=True)]
         elif type not in new.nodes:
             changes.append(Change(DESTRUCTIVE, type, "node type removed"))
         else:
@@ -421,7 +405,8 @@ def diff_models(old: DataModel | None, new: DataModel | None) -> list[Change]:
     for rel in _in_order(old.edges, new.edges):
         if rel not in old.edges:
             spec = new.edges[rel]
-            changes.append(Change(DESTRUCTIVE if spec.required else ADDITIVE, rel, f"new edge ({_ends(spec)}){', required' if spec.required else ''}"))
+            breaks = spec.required and any(t in old.nodes for t in spec.sources)
+            changes.append(Change(DESTRUCTIVE if breaks else ADDITIVE, rel, f"new edge ({_ends(spec)}){', required' if spec.required else ''}"))
         elif rel not in new.edges:
             changes.append(Change(DESTRUCTIVE, rel, "edge removed"))
         else:
@@ -433,8 +418,10 @@ def _in_order(old: dict, new: dict) -> list[str]:
     return [*new, *(name for name in old if name not in new)]
 
 
-def _new_fact(where: str, spec: FactSpec) -> Iterator[Change]:
-    yield Change(DESTRUCTIVE if spec.required else ADDITIVE, where, f"new fact ({_kind(spec)}){', required' if spec.required else ''}")
+def _new_fact(where: str, spec: FactSpec, fresh: bool = False) -> Iterator[Change]:
+    """A fact added to a type; ``fresh`` when the type itself is new."""
+    breaks = spec.required and not fresh
+    yield Change(DESTRUCTIVE if breaks else ADDITIVE, where, f"new fact ({_kind(spec)}){', required' if spec.required else ''}")
 
 
 def _kind(spec: FactSpec) -> str:
